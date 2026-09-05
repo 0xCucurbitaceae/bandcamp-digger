@@ -146,6 +146,7 @@ export default function App() {
         onEnded={g.handleEnded}
         onTimeUpdate={g.handleTimeUpdate}
         onDurationChange={g.handleDurationChange}
+        onError={g.handleAudioError}
         onGoto={() => g.current && g.goto(g.current)}
         onScrollToPlaying={g.scrollToPlaying}
       />

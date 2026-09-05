@@ -276,6 +276,27 @@ export function useGrid() {
     [playingId, current?.selectedTrackId, dur, isPlaying, play]
   );
 
+  // A signed stream URL eventually expires (410 Gone) even though it can outlive
+  // 37+ days — retry once per track selection by re-extracting a fresh one.
+  const retriedTrackRef = useRef<string | null>(null);
+  useEffect(() => {
+    retriedTrackRef.current = null; // a newly selected track gets its own retry budget
+  }, [current?.id, current?.selectedTrackId]);
+
+  const handleAudioError = useCallback(() => {
+    if (!current?.selectedTrackId) return;
+    const key = `${current.id}:${current.selectedTrackId}`;
+    if (retriedTrackRef.current === key) {
+      toast("That stream link is dead — try Sync");
+      return;
+    }
+    retriedTrackRef.current = key;
+    toast("Stream link expired — refreshing…");
+    chrome.runtime.sendMessage({ type: "refreshTrack", cardId: current.id });
+    // The refreshed streamUrl arrives via onStorageChange -> `current` updates ->
+    // the src-effect above picks up the new URL and resumes playback automatically.
+  }, [current, toast]);
+
   // ---------------------------------------------------------------------------
 
   const toggleExpand = useCallback((id: string) => {
@@ -422,6 +443,7 @@ export function useGrid() {
     scrubTrack,
     handleTimeUpdate,
     handleDurationChange,
+    handleAudioError,
     waveforms,
   };
 }

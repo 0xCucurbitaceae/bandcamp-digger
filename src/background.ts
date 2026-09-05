@@ -88,6 +88,35 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
   }
 }
 
+/**
+ * Re-extracts a single card to mint fresh signed stream URLs — used when
+ * playback hits a 410 (the URL's signature expired; BANDCAMP.md notes old
+ * signatures can outlive 37+ days but do eventually die). Re-extraction
+ * naturally resets to the release's default track, so whichever track was
+ * actually selected/playing is restored afterward with just its refreshed
+ * streamUrl — the user's manual track choice isn't lost.
+ */
+async function refreshTrack(cardId: string): Promise<void> {
+  const cards = await getCards();
+  const card = cards.find((c) => c.id === cardId);
+  if (!card) return;
+
+  const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
+  const tab = tabs.find((t) => t.url === card.url);
+  const refreshed = await extractOne(card, tab);
+
+  const kept = card.selectedTrackId ? refreshed.tracks.find((t) => t.trackId === card.selectedTrackId) : null;
+  const merged: CardRecord = kept
+    ? { ...refreshed, selectedTrackId: kept.trackId, track: kept.title, trackId: kept.trackId, streamUrl: kept.streamUrl }
+    : refreshed;
+
+  const latest = await getCards();
+  const idx = latest.findIndex((c) => c.id === cardId);
+  if (idx === -1) return;
+  latest[idx] = { ...latest[idx], ...merged };
+  await setCards(latest);
+}
+
 async function sync() {
   const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
   const tabsByUrl = new Map(tabs.filter((t) => t.url).map((t) => [t.url as string, t]));
@@ -170,6 +199,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "sync") {
     sync().then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
+  }
+  if (msg?.type === "refreshTrack" && msg.cardId) {
+    refreshTrack(msg.cardId).then(() => sendResponse({ ok: true }));
+    return true;
   }
   return false;
 });
