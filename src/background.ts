@@ -1,11 +1,14 @@
-import { parseTralbum, fetchExtract, fetchDiscography } from "./lib/bandcamp";
+import { parseTralbum, fetchExtract } from "./lib/bandcamp";
 import type { TralbumData } from "./lib/bandcamp";
+import type { DiscographyItem } from "./lib/discography";
 import { getCards, setCards, getLabel, setLabel } from "./lib/storage";
-import type { CardRecord, LabelCollection } from "./lib/types";
+import type { CardRecord } from "./lib/types";
 
 const BANDCAMP_MATCH = "*://*.bandcamp.com/*";
 const FETCH_STAGGER_MS = 2000;
-const LABEL_MENU_ID = "label-tracks";
+// Releases on a custom domain aren't in host_permissions, so their fetch can
+// never succeed; without a cap the page's 60s resume would retry them forever.
+const MAX_ATTEMPTS = 3;
 
 chrome.action.onClicked.addListener(() => openGrid());
 
@@ -99,7 +102,9 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
     case "not-found":
       return { ...card, status: "error", permanentFailure: true, refreshedAt: nowMs() };
     case "transient":
-      return card; // leave as-is, retried on next sync
+      // Still pending, but one attempt closer to being given up on — a release
+      // on a domain we hold no permission for can never succeed.
+      return { ...card, attempts: card.attempts + 1 };
   }
 }
 
@@ -131,6 +136,7 @@ async function sync() {
         artUrl: null,
         status: "pending",
         permanentFailure: false,
+        attempts: 0,
         refreshedAt: null,
         order: cards.length,
         archived: false,
@@ -184,31 +190,6 @@ async function sync() {
 
 // --- label catalogue --------------------------------------------------------
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: LABEL_MENU_ID,
-      title: "View all tracks from this label",
-      contexts: ["page", "link"],
-      documentUrlPatterns: [BANDCAMP_MATCH],
-    });
-  });
-});
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== LABEL_MENU_ID) return;
-  const pageUrl = info.pageUrl ?? tab?.url;
-  if (!pageUrl) return;
-  const { origin, host } = new URL(pageUrl);
-
-  // Placeholder first, so the page can open immediately and show progress
-  // rather than the user staring at the bandcamp tab for a few seconds.
-  if (!(await getLabel(host))) {
-    await setLabel({ id: host, url: origin, name: host, discographyLoaded: false, error: null, cards: [] });
-  }
-  await chrome.tabs.create({ url: chrome.runtime.getURL(`src/label/index.html?id=${encodeURIComponent(host)}`) });
-});
-
 /** Rewrites one card inside a label collection, re-reading first so concurrent
  *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
 async function applyLabelCard(labelId: string, updated: CardRecord) {
@@ -220,52 +201,64 @@ async function applyLabelCard(labelId: string, updated: CardRecord) {
   await setLabel(col);
 }
 
-// Labels already being walked, so a page reload doesn't queue every release twice.
+function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
+  return {
+    id: item.url,
+    url: item.url,
+    tabId: null,
+    title: item.title,
+    favIconUrl: null,
+    artist: item.artist,
+    album: item.title,
+    tracks: [],
+    selectedTrackId: null,
+    track: null,
+    trackId: null,
+    streamUrl: null,
+    artUrl: item.artUrl,
+    status: "pending",
+    permanentFailure: false,
+    attempts: 0,
+    refreshedAt: null,
+    order,
+    archived: false,
+  };
+}
+
+/**
+ * Stores the catalogue the content script read off the page and opens the label
+ * page on it. Re-clicking the button refreshes the release list while keeping
+ * every tracklist already fetched — reloading those would cost another full walk.
+ */
+async function openLabel(id: string, url: string, name: string, items: DiscographyItem[]) {
+  const existing = await getLabel(id);
+  const byUrl = new Map((existing?.cards ?? []).map((c) => [c.url, c]));
+  const cards = items.map((item, i) => {
+    const prev = byUrl.get(item.url);
+    return prev ? { ...prev, order: i } : cardFromRelease(item, i);
+  });
+
+  await setLabel({ id, url, name, cards });
+  const pageUrl = chrome.runtime.getURL(`src/label/index.html?id=${encodeURIComponent(id)}`);
+  const open = await chrome.tabs.query({ url: pageUrl });
+  if (open[0]?.id) await chrome.tabs.update(open[0].id, { active: true });
+  else await chrome.tabs.create({ url: pageUrl });
+}
+
+// Labels already being walked, so the page's resume kick doesn't queue twice.
 const loadingLabels = new Set<string>();
 
+/** Walks the releases that still have no tracklist. Resumable by design: the
+ *  page re-kicks this every 60s in case the service worker was torn down. */
 async function loadLabel(id: string) {
   if (loadingLabels.has(id)) return;
-  let col = await getLabel(id);
+  const col = await getLabel(id);
   if (!col) return;
   loadingLabels.add(id);
   try {
-    if (!col.discographyLoaded) {
-      const disco = await enqueueFetch(() => fetchDiscography(col!.url));
-      if (!disco || disco.items.length === 0) {
-        await setLabel({ ...col, error: "Couldn't read a discography from that page." });
-        return;
-      }
-      col = {
-        ...col,
-        name: disco.bandName || col.name,
-        discographyLoaded: true,
-        error: null,
-        cards: disco.items.map((item, i) => ({
-          id: item.url,
-          url: item.url,
-          tabId: null,
-          title: item.title,
-          favIconUrl: null,
-          artist: item.artist,
-          album: item.title,
-          tracks: [],
-          selectedTrackId: null,
-          track: null,
-          trackId: null,
-          streamUrl: null,
-          artUrl: item.artUrl,
-          status: "pending",
-          permanentFailure: false,
-          refreshedAt: null,
-          order: i,
-          archived: false,
-        })),
-      };
-      await setLabel(col);
-    }
-
-    // Resumable: only ever the releases still without a tracklist.
-    const pending = col.cards.filter((c) => c.status === "pending" && !c.permanentFailure);
+    const pending = col.cards.filter(
+      (c) => c.status === "pending" && !c.permanentFailure && c.attempts < MAX_ATTEMPTS
+    );
     for (const c of pending) {
       const updated = await enqueueFetch(() => extractOne(c, undefined));
       await applyLabelCard(id, updated);
@@ -286,6 +279,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     loadLabel(msg.id);
     sendResponse({ ok: true });
     return false;
+  }
+  if (msg?.type === "openLabel") {
+    openLabel(msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    return true;
   }
   return false;
 });

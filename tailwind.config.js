@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./src/{grid,label,hooks}/**/*.{html,tsx,ts}"],
+  content: ["./src/{grid,label,hooks}/**/*.{html,tsx,ts}"], // the content script styles inline — bandcamp's own CSS is not ours to extend
   theme: {
     extend: {
       colors: {

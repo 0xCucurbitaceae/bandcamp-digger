@@ -12,6 +12,7 @@ function normalizeCard(c: CardRecord): CardRecord {
     tracks: c.tracks ?? [],
     selectedTrackId: c.selectedTrackId ?? null,
     archived: c.archived ?? false,
+    attempts: c.attempts ?? 0,
   };
 }
 

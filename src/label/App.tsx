@@ -6,12 +6,8 @@ import { useLabel } from "./hooks/useLabel";
 export default function App() {
   const l = useLabel();
   const total = l.cards.length;
-  const stillLoading = total === 0 || l.loadedCount < total;
-
-  let status: string;
-  if (!l.collection?.discographyLoaded) status = "reading discography…";
-  else if (stillLoading) status = `${l.loadedCount} / ${total} releases loaded`;
-  else status = `${total} releases`;
+  const status =
+    l.loadedCount < total ? `${l.loadedCount} / ${total} releases loaded` : `${total} releases`;
 
   return (
     <div className="min-h-screen bg-bg pb-[92px] font-sans text-text">
@@ -44,14 +40,10 @@ export default function App() {
 
       <div className="mx-11 h-px bg-border" />
 
-      {l.collection?.error ? (
-        <div className="px-11 py-16 text-sm text-danger">{l.collection.error}</div>
-      ) : !l.loaded ? null : !l.collection ? (
+      {!l.loaded ? null : total === 0 ? (
         <div className="px-11 py-16 text-sm text-subtext">
-          Nothing here — right-click a Bandcamp page and pick “View all tracks from this label”.
+          Nothing here — open a Bandcamp label or artist page and hit “Listen to all”.
         </div>
-      ) : total === 0 ? (
-        <div className="px-11 py-16 text-sm text-subtext">Reading the catalogue…</div>
       ) : (
         <ListView
           cards={l.cards}

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "check": "node --experimental-strip-types src/lib/bandcamp.check.ts"
+    "check": "node --experimental-strip-types src/lib/discography.check.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
