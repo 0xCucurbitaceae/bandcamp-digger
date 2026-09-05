@@ -33,11 +33,21 @@ export async function setPlaybackMode(mode: PlaybackMode): Promise<void> {
   await chrome.storage.local.set({ [PLAYBACK_MODE_KEY]: mode });
 }
 
+/** Backfills a column added after a UiConfig may already be persisted (e.g. `bpm`) —
+ *  a plain object spread won't add a missing entry to an already-persisted array. */
+function normalizeUiConfig(cfg: Partial<UiConfig> | undefined): UiConfig {
+  const merged = { ...DEFAULT_UI_CONFIG, ...cfg };
+  const missingCols = DEFAULT_UI_CONFIG.listColumnOrder.filter((id) => !merged.listColumnOrder.includes(id));
+  if (missingCols.length) merged.listColumnOrder = [...merged.listColumnOrder, ...missingCols];
+  merged.listColumnSizing = { ...DEFAULT_UI_CONFIG.listColumnSizing, ...merged.listColumnSizing };
+  return merged;
+}
+
 /** Screen state (view mode, archive collapsed/open, list column layout) — so the
  *  grid page looks the same as when the user last left it. */
 export async function getUiConfig(): Promise<UiConfig> {
   const { [UI_CONFIG_KEY]: cfg } = await chrome.storage.local.get(UI_CONFIG_KEY);
-  return { ...DEFAULT_UI_CONFIG, ...(cfg as Partial<UiConfig> | undefined) };
+  return normalizeUiConfig(cfg as Partial<UiConfig> | undefined);
 }
 
 export async function setUiConfig(cfg: UiConfig): Promise<void> {
@@ -53,7 +63,7 @@ export function onStorageChange(
     const out: { cards?: CardRecord[]; playbackMode?: PlaybackMode; uiConfig?: UiConfig } = {};
     if (changes[CARDS_KEY]) out.cards = ((changes[CARDS_KEY].newValue as CardRecord[] | undefined) ?? []).map(normalizeCard);
     if (changes[PLAYBACK_MODE_KEY]) out.playbackMode = changes[PLAYBACK_MODE_KEY].newValue as PlaybackMode;
-    if (changes[UI_CONFIG_KEY]) out.uiConfig = { ...DEFAULT_UI_CONFIG, ...(changes[UI_CONFIG_KEY].newValue as Partial<UiConfig> | undefined) };
+    if (changes[UI_CONFIG_KEY]) out.uiConfig = normalizeUiConfig(changes[UI_CONFIG_KEY].newValue as Partial<UiConfig> | undefined);
     if (out.cards || out.playbackMode || out.uiConfig) cb(out);
   };
   chrome.storage.onChanged.addListener(listener);

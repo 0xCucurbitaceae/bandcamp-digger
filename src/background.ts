@@ -89,21 +89,40 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
 }
 
 /**
- * Re-extracts a single card to mint fresh signed stream URLs — used when
- * playback hits a 410 (the URL's signature expired; BANDCAMP.md notes old
- * signatures can outlive 37+ days but do eventually die). Re-extraction
- * naturally resets to the release's default track, so whichever track was
- * actually selected/playing is restored afterward with just its refreshed
- * streamUrl — the user's manual track choice isn't lost.
+ * Re-extracts a single card to mint a fresh signed stream URL — used when
+ * playback hits a 410 (the signature expired; BANDCAMP.md notes old
+ * signatures can outlive 37+ days but do eventually die).
+ *
+ * Deliberately skips the DOM-read path even if the tab is open: the DOM is
+ * whatever HTML the page loaded with — reading it again returns the exact
+ * same (now-expired) signed URL, since nothing re-renders it. Only an actual
+ * network fetch makes Bandcamp mint a new signature, so this always uses
+ * `fetchExtract` directly.
+ *
+ * Re-extraction naturally resets to the release's default track, so whichever
+ * track was actually selected/playing is restored afterward with just its
+ * refreshed streamUrl — the user's manual track choice isn't lost.
  */
 async function refreshTrack(cardId: string): Promise<void> {
   const cards = await getCards();
   const card = cards.find((c) => c.id === cardId);
   if (!card) return;
 
-  const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
-  const tab = tabs.find((t) => t.url === card.url);
-  const refreshed = await extractOne(card, tab);
+  const outcome = await fetchExtract(card.url);
+  let refreshed: CardRecord;
+  switch (outcome.kind) {
+    case "ok":
+      refreshed = applyTralbum(card, outcome.data);
+      break;
+    case "no-tracklist":
+      refreshed = { ...card, status: "unplayable", refreshedAt: nowMs() };
+      break;
+    case "not-found":
+      refreshed = { ...card, status: "error", permanentFailure: true, refreshedAt: nowMs() };
+      break;
+    case "transient":
+      return; // nothing to apply — leave the card as-is
+  }
 
   const kept = card.selectedTrackId ? refreshed.tracks.find((t) => t.trackId === card.selectedTrackId) : null;
   const merged: CardRecord = kept

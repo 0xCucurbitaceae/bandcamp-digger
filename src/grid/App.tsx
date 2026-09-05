@@ -93,6 +93,7 @@ export default function App() {
           pos={g.pos}
           dur={g.dur}
           waveforms={g.waveforms}
+          bpms={g.bpms}
           columnOrder={g.listColumnOrder}
           columnSizing={g.listColumnSizing}
           onColumnsChange={g.setListColumns}

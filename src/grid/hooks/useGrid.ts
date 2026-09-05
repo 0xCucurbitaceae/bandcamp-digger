@@ -10,7 +10,7 @@ import {
 } from "../../lib/storage";
 import type { CardRecord, ListColumnId, PlaybackMode, UiConfig, ViewMode } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
-import { computeWaveform, getCachedWaveform } from "../../lib/waveform";
+import { computeAnalysis, getCachedAnalysis } from "../../lib/waveform";
 
 const isPlayable = (c: CardRecord) => c.status === "ready" && !!c.streamUrl;
 
@@ -44,6 +44,7 @@ export function useGrid() {
   const [volume, setVolume] = useState(0.7);
   const [pendingSeek, setPendingSeek] = useState<PendingSeek | null>(null);
   const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
+  const [bpms, setBpms] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     getCards().then((c) => setCardsState(c.slice().sort((a, b) => a.order - b.order)));
@@ -216,19 +217,21 @@ export function useGrid() {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Real waveform for the scrobbler — only ever decoded for the track that's
-  // actually loaded right now, and only once per track for the session.
+  // Real waveform + BPM — one decode, only for the track that's actually
+  // loaded right now, only once per track for the session (see waveform.ts).
   useEffect(() => {
     const trackId = current?.selectedTrackId;
     const streamUrl = current?.streamUrl;
     if (!trackId || !streamUrl) return;
-    const cached = getCachedWaveform(trackId);
+    const cached = getCachedAnalysis(trackId);
     if (cached) {
-      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached }));
+      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached.peaks }));
+      setBpms((prev) => (trackId in prev ? prev : { ...prev, [trackId]: cached.bpm }));
       return;
     }
-    computeWaveform(trackId, streamUrl, (peaks) => {
-      setWaveforms((prev) => ({ ...prev, [trackId]: peaks }));
+    computeAnalysis(trackId, streamUrl, (result) => {
+      setWaveforms((prev) => ({ ...prev, [trackId]: result.peaks }));
+      setBpms((prev) => ({ ...prev, [trackId]: result.bpm }));
     });
   }, [current?.selectedTrackId, current?.streamUrl]);
 
@@ -445,5 +448,6 @@ export function useGrid() {
     handleDurationChange,
     handleAudioError,
     waveforms,
+    bpms,
   };
 }
