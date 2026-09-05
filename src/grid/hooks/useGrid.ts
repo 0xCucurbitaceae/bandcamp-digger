@@ -1,33 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  getCards,
-  setCards,
-  getPlaybackMode,
-  setPlaybackMode,
-  getUiConfig,
-  setUiConfig,
-  onStorageChange,
-} from "../../lib/storage";
-import type { CardRecord, ListColumnId, PlaybackMode, UiConfig, ViewMode } from "../../lib/types";
+import { getCards, setCards, getUiConfig, setUiConfig, onStorageChange } from "../../lib/storage";
+import type { CardRecord, ListColumnId, UiConfig, ViewMode } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
-import { computeWaveform, getCachedWaveform } from "../../lib/waveform";
-
-const isPlayable = (c: CardRecord) => c.status === "ready" && !!c.streamUrl;
+import { usePlayer } from "../../hooks/usePlayer";
 
 export type { ViewMode };
 
-interface PendingSeek {
-  cardId: string;
-  trackId: string;
-  fraction: number;
-}
-
 export function useGrid() {
   const [cards, setCardsState] = useState<CardRecord[]>([]);
-  const [playbackMode, setPlaybackModeState] = useState<PlaybackMode>("single");
   const [uiConfig, setUiConfigState] = useState<UiConfig>(DEFAULT_UI_CONFIG);
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -36,22 +17,11 @@ export function useGrid() {
   const [toastMsg, setToastMsg] = useState("");
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  // Audio playback: owned here (not in PlayerBar) so other views — the list
-  // view's per-track scrobbler — can read/drive the same position & duration.
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const [pos, setPos] = useState(0);
-  const [dur, setDur] = useState(0);
-  const [volume, setVolume] = useState(0.7);
-  const [pendingSeek, setPendingSeek] = useState<PendingSeek | null>(null);
-  const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
-
   useEffect(() => {
     getCards().then((c) => setCardsState(c.slice().sort((a, b) => a.order - b.order)));
-    getPlaybackMode().then(setPlaybackModeState);
     getUiConfig().then(setUiConfigState);
     return onStorageChange((changes) => {
       if (changes.cards) setCardsState(changes.cards.slice().sort((a, b) => a.order - b.order));
-      if (changes.playbackMode) setPlaybackModeState(changes.playbackMode);
       if (changes.uiConfig) setUiConfigState(changes.uiConfig);
     });
   }, []);
@@ -67,11 +37,12 @@ export function useGrid() {
 
   const setView = useCallback((v: ViewMode) => updateUiConfig({ view: v }), [updateUiConfig]);
   const toggleArchiveOpen = useCallback(
-    () => setUiConfigState((prev) => {
-      const next = { ...prev, archiveOpen: !prev.archiveOpen };
-      setUiConfig(next);
-      return next;
-    }),
+    () =>
+      setUiConfigState((prev) => {
+        const next = { ...prev, archiveOpen: !prev.archiveOpen };
+        setUiConfig(next);
+        return next;
+      }),
     []
   );
   const setListColumns = useCallback(
@@ -89,8 +60,17 @@ export function useGrid() {
   const allSorted = useMemo(() => cards.slice().sort((a, b) => a.order - b.order), [cards]);
   const ordered = useMemo(() => allSorted.filter((c) => !c.archived), [allSorted]);
   const archivedCards = useMemo(() => allSorted.filter((c) => c.archived), [allSorted]);
-  const queue = useMemo(() => ordered.filter(isPlayable), [ordered]);
-  const current = useMemo(() => cards.find((c) => c.id === playingId) ?? null, [cards, playingId]);
+
+  const persistCard = useCallback((updated: CardRecord) => {
+    setCardsState((prev) => {
+      const next = prev.map((c) => (c.id === updated.id ? updated : c));
+      setCards(next);
+      return next;
+    });
+  }, []);
+
+  const player = usePlayer({ cards, ordered, persistCard });
+  const { playingId, setPlayingId, setIsPlaying } = player;
 
   const requestSync = useCallback(async () => {
     if (syncing) return;
@@ -108,22 +88,6 @@ export function useGrid() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const togglePlaybackMode = useCallback(() => {
-    setPlaybackModeState((prev) => {
-      const next: PlaybackMode = prev === "single" ? "album" : "single";
-      setPlaybackMode(next);
-      return next;
-    });
-  }, []);
-
-  const persistCard = useCallback((updated: CardRecord) => {
-    setCardsState((prev) => {
-      const next = prev.map((c) => (c.id === updated.id ? updated : c));
-      setCards(next);
-      return next;
-    });
-  }, []);
-
   /** Reorders the visible (non-archived) list; archived cards keep their existing order untouched. */
   const persistOrder = useCallback((newVisible: CardRecord[]) => {
     setCardsState((prev) => {
@@ -134,149 +98,6 @@ export function useGrid() {
       return merged;
     });
   }, []);
-
-  /** Loads a specific track into a card (from the expand panel / list sub-rows) — doesn't itself start playback. */
-  const selectTrack = useCallback(
-    (cardId: string, trackId: string) => {
-      const card = cards.find((c) => c.id === cardId);
-      const track = card?.tracks.find((t) => t.trackId === trackId);
-      if (!card || !track) return;
-      persistCard({ ...card, selectedTrackId: track.trackId, track: track.title, trackId: track.trackId, streamUrl: track.streamUrl });
-    },
-    [cards, persistCard]
-  );
-
-  const play = useCallback(
-    (id: string, trackId?: string) => {
-      if (trackId) selectTrack(id, trackId);
-      setPlayingId((prevId) => {
-        const samePlace = prevId === id && (!trackId || cards.find((c) => c.id === id)?.selectedTrackId === trackId);
-        if (samePlace) {
-          setIsPlaying((p) => !p);
-          return prevId;
-        }
-        setIsPlaying(true);
-        return id;
-      });
-    },
-    [cards, selectTrack]
-  );
-
-  const step = useCallback(
-    (dir: 1 | -1) => {
-      if (queue.length === 0) return;
-      const i = queue.findIndex((c) => c.id === playingId);
-      const next = queue[(i + dir + queue.length) % queue.length];
-      if (next) play(next.id);
-    },
-    [queue, playingId, play]
-  );
-
-  /** Called on the <audio> "ended" event. In "album" mode, keeps advancing through
-   *  the current release's remaining playable tracks before moving to the next card. */
-  const handleEnded = useCallback(() => {
-    if (playbackMode === "album" && current) {
-      const tracks = current.tracks;
-      const idx = tracks.findIndex((t) => t.trackId === current.selectedTrackId);
-      const next = tracks.slice(idx + 1).find((t) => t.streamUrl);
-      if (next) {
-        selectTrack(current.id, next.trackId);
-        return;
-      }
-    }
-    step(1);
-  }, [playbackMode, current, selectTrack, step]);
-
-  // --- audio element wiring -------------------------------------------------
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const streamUrl = current?.streamUrl ?? null;
-    if (streamUrl && audio.src !== streamUrl) {
-      audio.src = streamUrl;
-      setPos(0);
-      setDur(0);
-    }
-    if (!streamUrl) {
-      audio.removeAttribute("src");
-      setPos(0);
-      setDur(0);
-    }
-  }, [current?.streamUrl]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !current?.streamUrl) return;
-    if (isPlaying) audio.play().catch(() => setIsPlaying(false));
-    else audio.pause();
-  }, [isPlaying, current?.streamUrl]);
-
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = volume;
-  }, [volume]);
-
-  // Real waveform for the scrobbler — only ever decoded for the track that's
-  // actually loaded right now, and only once per track for the session.
-  useEffect(() => {
-    const trackId = current?.selectedTrackId;
-    const streamUrl = current?.streamUrl;
-    if (!trackId || !streamUrl) return;
-    const cached = getCachedWaveform(trackId);
-    if (cached) {
-      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached }));
-      return;
-    }
-    computeWaveform(trackId, streamUrl, (peaks) => {
-      setWaveforms((prev) => ({ ...prev, [trackId]: peaks }));
-    });
-  }, [current?.selectedTrackId, current?.streamUrl]);
-
-  const handleTimeUpdate = useCallback((t: number) => setPos(t), []);
-
-  const handleDurationChange = useCallback(
-    (d: number) => {
-      setDur(d);
-      setPendingSeek((pending) => {
-        if (pending && pending.cardId === playingId && pending.trackId === current?.selectedTrackId && d > 0) {
-          if (audioRef.current) audioRef.current.currentTime = pending.fraction * d;
-          return null;
-        }
-        return pending;
-      });
-    },
-    [playingId, current?.selectedTrackId]
-  );
-
-  /** Footer seek bar — only meaningful once a track is loaded. */
-  const seek = useCallback(
-    (fraction: number) => {
-      if (audioRef.current && dur > 0) audioRef.current.currentTime = fraction * dur;
-    },
-    [dur]
-  );
-
-  const setVolumeFraction = useCallback((fraction: number) => {
-    setVolume(Math.max(0, Math.min(1, fraction)));
-  }, []);
-
-  /** List-view scrobbler: seek immediately if that track is already loaded & current,
-   *  otherwise select+play it and apply the seek once its metadata loads. */
-  const scrubTrack = useCallback(
-    (cardId: string, trackId: string, fraction: number) => {
-      const isLoadedCurrent = playingId === cardId && current?.selectedTrackId === trackId && dur > 0;
-      if (isLoadedCurrent) {
-        if (audioRef.current) audioRef.current.currentTime = fraction * dur;
-        if (!isPlaying) setIsPlaying(true);
-      } else {
-        setPendingSeek({ cardId, trackId, fraction });
-        play(cardId, trackId);
-      }
-    },
-    [playingId, current?.selectedTrackId, dur, isPlaying, play]
-  );
-
-  // ---------------------------------------------------------------------------
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
@@ -328,12 +149,6 @@ export function useGrid() {
     [persistCard, toast]
   );
 
-  const scrollToPlaying = useCallback(() => {
-    const el = document.querySelector('[data-playing="true"]');
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, []);
-
   // Closing a tab is the only removal action now — it just goes "dead" (cached
   // data + playback stay intact) until a re-sync re-links it to a reopened tab.
   const closeTab = useCallback(async (card: CardRecord) => {
@@ -362,7 +177,7 @@ export function useGrid() {
       setPlayingId(null);
       setIsPlaying(false);
     }
-  }, [cards, playingId]);
+  }, [cards, playingId, setPlayingId, setIsPlaying]);
 
   /** Permanently deletes an archived card — the only true delete left in the app. */
   const removeArchived = useCallback((id: string) => {
@@ -374,22 +189,13 @@ export function useGrid() {
   }, []);
 
   return {
+    ...player,
     cards: ordered,
     archivedCards,
     archiveOpen: uiConfig.archiveOpen,
     toggleArchiveOpen,
-    queue,
-    current,
-    playingId,
-    isPlaying,
-    setIsPlaying,
     syncing,
     requestSync,
-    play,
-    step,
-    handleEnded,
-    playbackMode,
-    togglePlaybackMode,
     view: uiConfig.view,
     setView,
     listColumnOrder: uiConfig.listColumnOrder,
@@ -397,7 +203,6 @@ export function useGrid() {
     setListColumns,
     expandedId,
     toggleExpand,
-    selectTrack,
     dragId,
     overId,
     setDragId,
@@ -405,7 +210,6 @@ export function useGrid() {
     reorder,
     goto,
     reopenTab,
-    scrollToPlaying,
     closeTab,
     archiveDead,
     removeArchived,
@@ -413,15 +217,5 @@ export function useGrid() {
     setSettingsOpen,
     toast: toastMsg,
     pushToast: toast,
-    audioRef,
-    pos,
-    dur,
-    volume,
-    seek,
-    setVolumeFraction,
-    scrubTrack,
-    handleTimeUpdate,
-    handleDurationChange,
-    waveforms,
   };
 }

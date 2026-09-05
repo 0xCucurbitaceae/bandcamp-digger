@@ -1,12 +1,27 @@
-import { parseTralbum, fetchExtract } from "./lib/bandcamp";
+import { parseTralbum, fetchExtract, fetchDiscography } from "./lib/bandcamp";
 import type { TralbumData } from "./lib/bandcamp";
-import { getCards, setCards } from "./lib/storage";
-import type { CardRecord } from "./lib/types";
+import { getCards, setCards, getLabel, setLabel } from "./lib/storage";
+import type { CardRecord, LabelCollection } from "./lib/types";
 
 const BANDCAMP_MATCH = "*://*.bandcamp.com/*";
 const FETCH_STAGGER_MS = 2000;
+const LABEL_MENU_ID = "label-tracks";
 
 chrome.action.onClicked.addListener(() => openGrid());
+
+// Every outbound bandcamp fetch — tab sync and label catalogue loads alike —
+// goes through one chain so the 2s stagger is global. Two surfaces each doing
+// their own 2s would halve the real interval and push us into the error rate
+// BANDCAMP.md measured at 1.2s.
+let fetchChain: Promise<unknown> = Promise.resolve();
+
+function enqueueFetch<T>(job: () => Promise<T>): Promise<T> {
+  const run = fetchChain.then(job, job);
+  fetchChain = run
+    .catch(() => undefined)
+    .then(() => new Promise((r) => setTimeout(r, FETCH_STAGGER_MS)));
+  return run;
+}
 
 async function openGrid() {
   const url = chrome.runtime.getURL("src/grid/index.html");
@@ -160,9 +175,103 @@ async function sync() {
     domJobs.map(async (c) => applyUpdate(await extractOne(c, tabsByUrl.get(c.url))))
   );
 
+  // Not awaited: a queue shared with a big label load can be minutes deep, and
+  // the UI already updates live off storage — only the spinner would be waiting.
   for (const c of fetchJobs) {
-    await applyUpdate(await extractOne(c, tabsByUrl.get(c.url)));
-    await new Promise((r) => setTimeout(r, FETCH_STAGGER_MS));
+    enqueueFetch(() => extractOne(c, tabsByUrl.get(c.url))).then(applyUpdate);
+  }
+}
+
+// --- label catalogue --------------------------------------------------------
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: LABEL_MENU_ID,
+      title: "View all tracks from this label",
+      contexts: ["page", "link"],
+      documentUrlPatterns: [BANDCAMP_MATCH],
+    });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== LABEL_MENU_ID) return;
+  const pageUrl = info.pageUrl ?? tab?.url;
+  if (!pageUrl) return;
+  const { origin, host } = new URL(pageUrl);
+
+  // Placeholder first, so the page can open immediately and show progress
+  // rather than the user staring at the bandcamp tab for a few seconds.
+  if (!(await getLabel(host))) {
+    await setLabel({ id: host, url: origin, name: host, discographyLoaded: false, error: null, cards: [] });
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL(`src/label/index.html?id=${encodeURIComponent(host)}`) });
+});
+
+/** Rewrites one card inside a label collection, re-reading first so concurrent
+ *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
+async function applyLabelCard(labelId: string, updated: CardRecord) {
+  const col = await getLabel(labelId);
+  if (!col) return;
+  const idx = col.cards.findIndex((c) => c.id === updated.id);
+  if (idx === -1) return;
+  col.cards[idx] = { ...col.cards[idx], ...updated };
+  await setLabel(col);
+}
+
+// Labels already being walked, so a page reload doesn't queue every release twice.
+const loadingLabels = new Set<string>();
+
+async function loadLabel(id: string) {
+  if (loadingLabels.has(id)) return;
+  let col = await getLabel(id);
+  if (!col) return;
+  loadingLabels.add(id);
+  try {
+    if (!col.discographyLoaded) {
+      const disco = await enqueueFetch(() => fetchDiscography(col!.url));
+      if (!disco || disco.items.length === 0) {
+        await setLabel({ ...col, error: "Couldn't read a discography from that page." });
+        return;
+      }
+      col = {
+        ...col,
+        name: disco.bandName || col.name,
+        discographyLoaded: true,
+        error: null,
+        cards: disco.items.map((item, i) => ({
+          id: item.url,
+          url: item.url,
+          tabId: null,
+          title: item.title,
+          favIconUrl: null,
+          artist: item.artist,
+          album: item.title,
+          tracks: [],
+          selectedTrackId: null,
+          track: null,
+          trackId: null,
+          streamUrl: null,
+          artUrl: item.artUrl,
+          status: "pending",
+          permanentFailure: false,
+          refreshedAt: null,
+          order: i,
+          archived: false,
+        })),
+      };
+      await setLabel(col);
+    }
+
+    // Resumable: only ever the releases still without a tracklist.
+    const pending = col.cards.filter((c) => c.status === "pending" && !c.permanentFailure);
+    for (const c of pending) {
+      const updated = await enqueueFetch(() => extractOne(c, undefined));
+      await applyLabelCard(id, updated);
+    }
+  } finally {
+    loadingLabels.delete(id);
   }
 }
 
@@ -170,6 +279,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "sync") {
     sync().then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
+  }
+  if (msg?.type === "loadLabel" && typeof msg.id === "string") {
+    // Fire-and-forget: this can run for minutes on a big catalogue, and the
+    // page follows along through storage changes.
+    loadLabel(msg.id);
+    sendResponse({ ok: true });
+    return false;
   }
   return false;
 });

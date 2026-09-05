@@ -56,3 +56,19 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   listColumnOrder: ["title", "artist", "album"],
   listColumnSizing: { title: 320, artist: 160, album: 160 },
 };
+
+/** A band's whole catalogue, pulled from its /music page and played as one list.
+ *  Same CardRecord shape as the tab grid so the list view renders both — these
+ *  just never have a tabId. */
+export interface LabelCollection {
+  /** bandcamp subdomain host, e.g. "ninjatune.bandcamp.com" */
+  id: string;
+  /** origin the discography was read from */
+  url: string;
+  name: string;
+  /** false until the /music page has been read — cards is empty before that */
+  discographyLoaded: boolean;
+  /** set when the /music read failed outright */
+  error: string | null;
+  cards: CardRecord[];
+}

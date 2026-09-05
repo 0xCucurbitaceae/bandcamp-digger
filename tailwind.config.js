@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./src/grid/**/*.{html,tsx,ts}"],
+  content: ["./src/{grid,label,hooks}/**/*.{html,tsx,ts}"],
   theme: {
     extend: {
       colors: {

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "node --experimental-strip-types src/lib/bandcamp.check.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
