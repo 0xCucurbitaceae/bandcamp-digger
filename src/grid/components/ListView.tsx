@@ -13,6 +13,7 @@ const COLUMN_DEFS: ColumnDef<object>[] = [
   { id: "title", header: "Title", minSize: 200 },
   { id: "artist", header: "Artist", minSize: 90 },
   { id: "album", header: "Album", minSize: 90 },
+  { id: "bpm", header: "BPM", minSize: 48, maxSize: 100 },
 ];
 
 /** Moves `id` to sit where `target` currently is. */
@@ -33,6 +34,7 @@ interface Props {
   pos: number;
   dur: number;
   waveforms: Record<string, number[]>;
+  bpms: Record<string, number | null>;
   columnOrder: ListColumnId[];
   columnSizing: Partial<Record<ListColumnId, number>>;
   onColumnsChange: (order: ListColumnId[], sizing: Partial<Record<ListColumnId, number>>) => void;
@@ -54,6 +56,7 @@ export default function ListView({
   pos,
   dur,
   waveforms,
+  bpms,
   columnOrder,
   columnSizing,
   onColumnsChange,
@@ -126,6 +129,17 @@ export default function ListView({
             {card.album}
           </div>
         );
+      case "bpm": {
+        // Only ever computed for whichever track is actually loaded — blank for
+        // everything else until you play it (lazy, no upfront analysis pass).
+        const bpm = bpms[track.trackId];
+        const analyzing = isCurrent && bpm === undefined;
+        return (
+          <div className="truncate text-xs" style={{ color: isDead ? "#5b5854" : "#8d8a85" }}>
+            {analyzing ? "…" : bpm == null ? "" : bpm}
+          </div>
+        );
+      }
       default:
         return null;
     }

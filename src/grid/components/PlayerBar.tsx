@@ -16,6 +16,7 @@ interface Props {
   onEnded: () => void;
   onTimeUpdate: (t: number) => void;
   onDurationChange: (d: number) => void;
+  onError: () => void;
   onGoto: () => void;
   onScrollToPlaying: () => void;
 }
@@ -42,6 +43,7 @@ export default function PlayerBar({
   onEnded,
   onTimeUpdate,
   onDurationChange,
+  onError,
   onGoto,
   onScrollToPlaying,
 }: Props) {
@@ -54,6 +56,7 @@ export default function PlayerBar({
         onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime)}
         onDurationChange={(e) => onDurationChange(e.currentTarget.duration || 0)}
         onEnded={onEnded}
+        onError={onError}
       />
       <div
         onClick={(e) => {

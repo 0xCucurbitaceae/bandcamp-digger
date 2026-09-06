@@ -1,5 +1,6 @@
 import { Coffee, ExternalLink, Zap } from "lucide-react";
 import ListView from "../grid/components/ListView";
+import Toast from "../grid/components/Toast";
 import PlayerBar from "../grid/components/PlayerBar";
 import { useLabel } from "./hooks/useLabel";
 
@@ -53,6 +54,7 @@ export default function App() {
           pos={l.pos}
           dur={l.dur}
           waveforms={l.waveforms}
+          bpms={l.bpms}
           columnOrder={l.listColumnOrder}
           columnSizing={l.listColumnSizing}
           onColumnsChange={l.setListColumns}
@@ -78,9 +80,12 @@ export default function App() {
         onEnded={l.handleEnded}
         onTimeUpdate={l.handleTimeUpdate}
         onDurationChange={l.handleDurationChange}
+        onError={l.handleAudioError}
         onGoto={() => l.current && l.openRelease(l.current)}
         onScrollToPlaying={l.scrollToPlaying}
       />
+
+      <Toast message={l.toast} />
     </div>
   );
 }

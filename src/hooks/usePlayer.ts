@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getPlaybackMode, setPlaybackMode } from "../lib/storage";
 import type { CardRecord, PlaybackMode } from "../lib/types";
-import { computeWaveform, getCachedWaveform } from "../lib/waveform";
+import { computeAnalysis, getCachedAnalysis } from "../lib/waveform";
 
 export const isPlayable = (c: CardRecord) => c.status === "ready" && !!c.streamUrl;
 
@@ -18,6 +18,10 @@ interface Args {
   ordered: CardRecord[];
   /** writes a card back to whichever store owns it (tab grid or label collection) */
   persistCard: (card: CardRecord) => void;
+  /** asks the background to mint a fresh signed stream URL for this card, into
+   *  whichever store owns it — see refreshTrack in background.ts */
+  refreshTrack: (cardId: string) => void;
+  onToast: (msg: string) => void;
 }
 
 /**
@@ -26,7 +30,7 @@ interface Args {
  * scrobbler reads the same position/duration, and shared by the tab grid and
  * the label page — they differ only in where their cards come from.
  */
-export function usePlayer({ cards, ordered, persistCard }: Args) {
+export function usePlayer({ cards, ordered, persistCard, refreshTrack, onToast }: Args) {
   const [playbackMode, setPlaybackModeState] = useState<PlaybackMode>("single");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -37,6 +41,7 @@ export function usePlayer({ cards, ordered, persistCard }: Args) {
   const [volume, setVolume] = useState(0.7);
   const [pendingSeek, setPendingSeek] = useState<PendingSeek | null>(null);
   const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
+  const [bpms, setBpms] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     getPlaybackMode().then(setPlaybackModeState);
@@ -134,19 +139,21 @@ export function usePlayer({ cards, ordered, persistCard }: Args) {
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Real waveform for the scrobbler — only ever decoded for the track that's
-  // actually loaded right now, and only once per track for the session.
+  // Real waveform + BPM — one decode, only for the track that's actually
+  // loaded right now, only once per track for the session (see waveform.ts).
   useEffect(() => {
     const trackId = current?.selectedTrackId;
     const streamUrl = current?.streamUrl;
     if (!trackId || !streamUrl) return;
-    const cached = getCachedWaveform(trackId);
+    const cached = getCachedAnalysis(trackId);
     if (cached) {
-      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached }));
+      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached.peaks }));
+      setBpms((prev) => (trackId in prev ? prev : { ...prev, [trackId]: cached.bpm }));
       return;
     }
-    computeWaveform(trackId, streamUrl, (peaks) => {
-      setWaveforms((prev) => ({ ...prev, [trackId]: peaks }));
+    computeAnalysis(trackId, streamUrl, (result) => {
+      setWaveforms((prev) => ({ ...prev, [trackId]: result.peaks }));
+      setBpms((prev) => ({ ...prev, [trackId]: result.bpm }));
     });
   }, [current?.selectedTrackId, current?.streamUrl]);
 
@@ -194,6 +201,28 @@ export function usePlayer({ cards, ordered, persistCard }: Args) {
     [playingId, current?.selectedTrackId, dur, isPlaying, play]
   );
 
+  // A signed stream URL eventually expires (410 Gone) even though it can outlive
+  // 37+ days — retry once per track selection by re-extracting a fresh one.
+  const retriedTrackRef = useRef<string | null>(null);
+  useEffect(() => {
+    retriedTrackRef.current = null; // a newly selected track gets its own retry budget
+  }, [current?.id, current?.selectedTrackId]);
+
+  const handleAudioError = useCallback(() => {
+    if (!current?.selectedTrackId) return;
+    const key = `${current.id}:${current.selectedTrackId}`;
+    if (retriedTrackRef.current === key) {
+      onToast("That stream link is dead — try Sync");
+      return;
+    }
+    retriedTrackRef.current = key;
+    onToast("Stream link expired — refreshing…");
+    refreshTrack(current.id);
+    // The refreshed streamUrl arrives via the store's change listener ->
+    // `current` updates -> the src-effect above picks up the new URL and
+    // resumes playback automatically.
+  }, [current, refreshTrack, onToast]);
+
   const scrollToPlaying = useCallback(() => {
     document.querySelector('[data-playing="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
@@ -220,7 +249,9 @@ export function usePlayer({ cards, ordered, persistCard }: Args) {
     scrubTrack,
     handleTimeUpdate,
     handleDurationChange,
+    handleAudioError,
     waveforms,
+    bpms,
     scrollToPlaying,
   };
 }

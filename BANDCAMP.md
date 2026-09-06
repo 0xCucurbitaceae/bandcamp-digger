@@ -126,3 +126,20 @@ paywalls.
 
 The 2s stagger and retry/permanent-failure bookkeeping live in
 `src/background.ts`'s sync loop, not in `bandcamp.ts` itself.
+
+### Runtime 410s on the stream itself, not the page
+
+The 404/410 handling above is for fetching the **release page** (a pulled
+release, permanent). A signed stream URL (`t4.bcbits.com/stream/...`) is a
+separate thing that can independently expire mid-session — this project's
+BANDCAMP.md guidance said old signatures survive 37+ days as a measured
+lower bound, not a guarantee, and playback failure should trigger a
+re-fetch rather than assuming URLs are permanent. That's implemented as:
+the `<audio>` element's `error` event → `useGrid`'s `handleAudioError` →
+a `refreshTrack` message to the background service worker → `extractOne`
+re-run for just that card, minting a fresh signed URL → the specific
+track the user had selected is restored (only its `streamUrl` changes, not
+`selectedTrackId`) → the existing streamUrl-change effect swaps `audio.src`
+and resumes playback automatically. Retried once per track selection, not
+looped — a second failure on the same track surfaces a toast instead of
+retrying forever.

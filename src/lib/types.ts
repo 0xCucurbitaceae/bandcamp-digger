@@ -43,7 +43,7 @@ export type PlaybackMode = "single" | "album";
 export type ViewMode = "grid" | "list";
 
 /** List-view's resizable/reorderable data columns (the fixed num/play gutter isn't one of these). */
-export type ListColumnId = "title" | "artist" | "album";
+export type ListColumnId = "title" | "artist" | "album" | "bpm";
 
 /** Persisted screen state — so reopening the grid page looks like how it was left. */
 export interface UiConfig {
@@ -56,8 +56,8 @@ export interface UiConfig {
 export const DEFAULT_UI_CONFIG: UiConfig = {
   view: "grid",
   archiveOpen: false,
-  listColumnOrder: ["title", "artist", "album"],
-  listColumnSizing: { title: 320, artist: 160, album: 160 },
+  listColumnOrder: ["title", "artist", "album", "bpm"],
+  listColumnSizing: { title: 320, artist: 160, album: 160, bpm: 64 },
 };
 
 /** A band's whole catalogue, pulled from its /music page and played as one list.

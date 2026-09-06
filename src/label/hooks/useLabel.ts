@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getLabel, setLabel, getUiConfig, setUiConfig, onLabelChange, onStorageChange } from "../../lib/storage";
 import type { CardRecord, LabelCollection, ListColumnId, UiConfig } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
@@ -59,7 +59,23 @@ export function useLabel() {
     [labelId]
   );
 
-  const player = usePlayer({ cards, ordered: cards, persistCard });
+  const [toastMsg, setToastMsg] = useState("");
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+  const toast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(""), 1800);
+  }, []);
+
+  const player = usePlayer({
+    cards,
+    ordered: cards,
+    persistCard,
+    // labelId routes the refreshed card back into this collection rather than
+    // the tab grid's cards key.
+    refreshTrack: (cardId) => chrome.runtime.sendMessage({ type: "refreshTrack", cardId, labelId }),
+    onToast: toast,
+  });
 
   const setListColumns = useCallback(
     (order: ListColumnId[], sizing: Partial<Record<ListColumnId, number>>) =>
@@ -85,6 +101,7 @@ export function useLabel() {
     loaded,
     cards,
     loadedCount,
+    toast: toastMsg,
     listColumnOrder: uiConfig.listColumnOrder,
     listColumnSizing: uiConfig.listColumnSizing,
     setListColumns,

@@ -69,7 +69,13 @@ export function useGrid() {
     });
   }, []);
 
-  const player = usePlayer({ cards, ordered, persistCard });
+  const player = usePlayer({
+    cards,
+    ordered,
+    persistCard,
+    refreshTrack: (cardId) => chrome.runtime.sendMessage({ type: "refreshTrack", cardId }),
+    onToast: toast,
+  });
   const { playingId, setPlayingId, setIsPlaying } = player;
 
   const requestSync = useCallback(async () => {

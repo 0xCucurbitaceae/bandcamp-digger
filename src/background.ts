@@ -108,6 +108,61 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
   }
 }
 
+/**
+ * Re-extracts a single card to mint a fresh signed stream URL — used when
+ * playback hits a 410 (the signature expired; BANDCAMP.md notes old
+ * signatures can outlive 37+ days but do eventually die).
+ *
+ * Deliberately skips the DOM-read path even if the tab is open: the DOM is
+ * whatever HTML the page loaded with — reading it again returns the exact
+ * same (now-expired) signed URL, since nothing re-renders it. Only an actual
+ * network fetch makes Bandcamp mint a new signature, so this always uses
+ * `fetchExtract` directly.
+ *
+ * Re-extraction naturally resets to the release's default track, so whichever
+ * track was actually selected/playing is restored afterward with just its
+ * refreshed streamUrl — the user's manual track choice isn't lost.
+ *
+ * `labelId` selects the store: a label collection's releases carry the same
+ * signed URLs and expire the same way, so they get the same recovery.
+ */
+async function refreshTrack(cardId: string, labelId?: string): Promise<void> {
+  const cards = labelId ? (await getLabel(labelId))?.cards ?? [] : await getCards();
+  const card = cards.find((c) => c.id === cardId);
+  if (!card) return;
+
+  const outcome = await fetchExtract(card.url);
+  let refreshed: CardRecord;
+  switch (outcome.kind) {
+    case "ok":
+      refreshed = applyTralbum(card, outcome.data);
+      break;
+    case "no-tracklist":
+      refreshed = { ...card, status: "unplayable", refreshedAt: nowMs() };
+      break;
+    case "not-found":
+      refreshed = { ...card, status: "error", permanentFailure: true, refreshedAt: nowMs() };
+      break;
+    case "transient":
+      return; // nothing to apply — leave the card as-is
+  }
+
+  const kept = card.selectedTrackId ? refreshed.tracks.find((t) => t.trackId === card.selectedTrackId) : null;
+  const merged: CardRecord = kept
+    ? { ...refreshed, selectedTrackId: kept.trackId, track: kept.title, trackId: kept.trackId, streamUrl: kept.streamUrl }
+    : refreshed;
+
+  if (labelId) {
+    await applyLabelCard(labelId, merged);
+    return;
+  }
+  const latest = await getCards();
+  const idx = latest.findIndex((c) => c.id === cardId);
+  if (idx === -1) return;
+  latest[idx] = { ...latest[idx], ...merged };
+  await setCards(latest);
+}
+
 async function sync() {
   const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
   const tabsByUrl = new Map(tabs.filter((t) => t.url).map((t) => [t.url as string, t]));
@@ -282,6 +337,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === "openLabel") {
     openLabel(msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg?.type === "refreshTrack" && msg.cardId) {
+    // `labelId` routes the refreshed card back to a label collection instead of
+    // the tab grid — the label page's releases expire exactly the same way.
+    refreshTrack(msg.cardId, msg.labelId).then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;
