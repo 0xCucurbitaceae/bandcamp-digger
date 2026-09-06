@@ -3,13 +3,31 @@
   "name": "Bandcamp Tab Merger",
   "version": "0.1.0",
   "description": "Merge open Bandcamp tabs into one playable grid.",
-  "permissions": ["tabs", "scripting", "storage"],
-  "host_permissions": ["*://*.bandcamp.com/*", "*://*.bcbits.com/*"],
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.bandcamp.com/*",
+    "*://*.bcbits.com/*"
+  ],
   "background": {
     "service_worker": "src/background.ts",
     "type": "module"
   },
   "action": {
     "default_title": "Open Bandcamp Tab Merger"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bandcamp.com/*"
+      ],
+      "js": [
+        "src/content/listenAll.ts"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

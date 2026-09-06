@@ -1,12 +1,30 @@
 import { parseTralbum, fetchExtract } from "./lib/bandcamp";
 import type { TralbumData } from "./lib/bandcamp";
-import { getCards, setCards } from "./lib/storage";
+import type { DiscographyItem } from "./lib/discography";
+import { getCards, setCards, getLabel, setLabel } from "./lib/storage";
 import type { CardRecord } from "./lib/types";
 
 const BANDCAMP_MATCH = "*://*.bandcamp.com/*";
 const FETCH_STAGGER_MS = 2000;
+// Releases on a custom domain aren't in host_permissions, so their fetch can
+// never succeed; without a cap the page's 60s resume would retry them forever.
+const MAX_ATTEMPTS = 3;
 
 chrome.action.onClicked.addListener(() => openGrid());
+
+// Every outbound bandcamp fetch — tab sync and label catalogue loads alike —
+// goes through one chain so the 2s stagger is global. Two surfaces each doing
+// their own 2s would halve the real interval and push us into the error rate
+// BANDCAMP.md measured at 1.2s.
+let fetchChain: Promise<unknown> = Promise.resolve();
+
+function enqueueFetch<T>(job: () => Promise<T>): Promise<T> {
+  const run = fetchChain.then(job, job);
+  fetchChain = run
+    .catch(() => undefined)
+    .then(() => new Promise((r) => setTimeout(r, FETCH_STAGGER_MS)));
+  return run;
+}
 
 async function openGrid() {
   const url = chrome.runtime.getURL("src/grid/index.html");
@@ -84,7 +102,9 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
     case "not-found":
       return { ...card, status: "error", permanentFailure: true, refreshedAt: nowMs() };
     case "transient":
-      return card; // leave as-is, retried on next sync
+      // Still pending, but one attempt closer to being given up on — a release
+      // on a domain we hold no permission for can never succeed.
+      return { ...card, attempts: card.attempts + 1 };
   }
 }
 
@@ -102,9 +122,12 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
  * Re-extraction naturally resets to the release's default track, so whichever
  * track was actually selected/playing is restored afterward with just its
  * refreshed streamUrl — the user's manual track choice isn't lost.
+ *
+ * `labelId` selects the store: a label collection's releases carry the same
+ * signed URLs and expire the same way, so they get the same recovery.
  */
-async function refreshTrack(cardId: string): Promise<void> {
-  const cards = await getCards();
+async function refreshTrack(cardId: string, labelId?: string): Promise<void> {
+  const cards = labelId ? (await getLabel(labelId))?.cards ?? [] : await getCards();
   const card = cards.find((c) => c.id === cardId);
   if (!card) return;
 
@@ -129,6 +152,10 @@ async function refreshTrack(cardId: string): Promise<void> {
     ? { ...refreshed, selectedTrackId: kept.trackId, track: kept.title, trackId: kept.trackId, streamUrl: kept.streamUrl }
     : refreshed;
 
+  if (labelId) {
+    await applyLabelCard(labelId, merged);
+    return;
+  }
   const latest = await getCards();
   const idx = latest.findIndex((c) => c.id === cardId);
   if (idx === -1) return;
@@ -164,6 +191,7 @@ async function sync() {
         artUrl: null,
         status: "pending",
         permanentFailure: false,
+        attempts: 0,
         refreshedAt: null,
         order: cards.length,
         archived: false,
@@ -208,9 +236,90 @@ async function sync() {
     domJobs.map(async (c) => applyUpdate(await extractOne(c, tabsByUrl.get(c.url))))
   );
 
+  // Not awaited: a queue shared with a big label load can be minutes deep, and
+  // the UI already updates live off storage — only the spinner would be waiting.
   for (const c of fetchJobs) {
-    await applyUpdate(await extractOne(c, tabsByUrl.get(c.url)));
-    await new Promise((r) => setTimeout(r, FETCH_STAGGER_MS));
+    enqueueFetch(() => extractOne(c, tabsByUrl.get(c.url))).then(applyUpdate);
+  }
+}
+
+// --- label catalogue --------------------------------------------------------
+
+/** Rewrites one card inside a label collection, re-reading first so concurrent
+ *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
+async function applyLabelCard(labelId: string, updated: CardRecord) {
+  const col = await getLabel(labelId);
+  if (!col) return;
+  const idx = col.cards.findIndex((c) => c.id === updated.id);
+  if (idx === -1) return;
+  col.cards[idx] = { ...col.cards[idx], ...updated };
+  await setLabel(col);
+}
+
+function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
+  return {
+    id: item.url,
+    url: item.url,
+    tabId: null,
+    title: item.title,
+    favIconUrl: null,
+    artist: item.artist,
+    album: item.title,
+    tracks: [],
+    selectedTrackId: null,
+    track: null,
+    trackId: null,
+    streamUrl: null,
+    artUrl: item.artUrl,
+    status: "pending",
+    permanentFailure: false,
+    attempts: 0,
+    refreshedAt: null,
+    order,
+    archived: false,
+  };
+}
+
+/**
+ * Stores the catalogue the content script read off the page and opens the label
+ * page on it. Re-clicking the button refreshes the release list while keeping
+ * every tracklist already fetched — reloading those would cost another full walk.
+ */
+async function openLabel(id: string, url: string, name: string, items: DiscographyItem[]) {
+  const existing = await getLabel(id);
+  const byUrl = new Map((existing?.cards ?? []).map((c) => [c.url, c]));
+  const cards = items.map((item, i) => {
+    const prev = byUrl.get(item.url);
+    return prev ? { ...prev, order: i } : cardFromRelease(item, i);
+  });
+
+  await setLabel({ id, url, name, cards });
+  const pageUrl = chrome.runtime.getURL(`src/label/index.html?id=${encodeURIComponent(id)}`);
+  const open = await chrome.tabs.query({ url: pageUrl });
+  if (open[0]?.id) await chrome.tabs.update(open[0].id, { active: true });
+  else await chrome.tabs.create({ url: pageUrl });
+}
+
+// Labels already being walked, so the page's resume kick doesn't queue twice.
+const loadingLabels = new Set<string>();
+
+/** Walks the releases that still have no tracklist. Resumable by design: the
+ *  page re-kicks this every 60s in case the service worker was torn down. */
+async function loadLabel(id: string) {
+  if (loadingLabels.has(id)) return;
+  const col = await getLabel(id);
+  if (!col) return;
+  loadingLabels.add(id);
+  try {
+    const pending = col.cards.filter(
+      (c) => c.status === "pending" && !c.permanentFailure && c.attempts < MAX_ATTEMPTS
+    );
+    for (const c of pending) {
+      const updated = await enqueueFetch(() => extractOne(c, undefined));
+      await applyLabelCard(id, updated);
+    }
+  } finally {
+    loadingLabels.delete(id);
   }
 }
 
@@ -219,8 +328,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sync().then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
   }
+  if (msg?.type === "loadLabel" && typeof msg.id === "string") {
+    // Fire-and-forget: this can run for minutes on a big catalogue, and the
+    // page follows along through storage changes.
+    loadLabel(msg.id);
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg?.type === "openLabel") {
+    openLabel(msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (msg?.type === "refreshTrack" && msg.cardId) {
-    refreshTrack(msg.cardId).then(() => sendResponse({ ok: true }));
+    // `labelId` routes the refreshed card back to a label collection instead of
+    // the tab grid — the label page's releases expire exactly the same way.
+    refreshTrack(msg.cardId, msg.labelId).then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;

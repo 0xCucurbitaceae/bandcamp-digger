@@ -42,8 +42,11 @@ interface Props {
   onPlayTrack: (cardId: string, trackId: string) => void;
   onScrub: (cardId: string, trackId: string, fraction: number) => void;
   onGoto: (card: CardRecord) => void;
-  onClose: (card: CardRecord) => void;
-  onReopen: (card: CardRecord) => void;
+  /** tab-grid only — a label collection's releases have no tab behind them */
+  onClose?: (card: CardRecord) => void;
+  onReopen?: (card: CardRecord) => void;
+  /** false on the label page: no tab actions, and a null tabId isn't "dead" */
+  tabBacked?: boolean;
 }
 
 export default function ListView({
@@ -63,6 +66,7 @@ export default function ListView({
   onGoto,
   onClose,
   onReopen,
+  tabBacked = true,
 }: Props) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [dragCol, setDragCol] = useState<ListColumnId | null>(null);
@@ -173,10 +177,13 @@ export default function ListView({
       </div>
       {cards.map((c) => {
         const isSkeleton = c.status === "pending";
-        const isDead = !isSkeleton && c.tabId === null;
+        // A label release is known (art, title, artist) before its tracklist is —
+        // only shimmer the meta block when we genuinely have nothing yet.
+        const metaKnown = !!c.album;
+        const isDead = tabBacked && !isSkeleton && c.tabId === null;
         const isUnplayable = c.status === "unplayable" || c.status === "error";
         const playable = c.status === "ready";
-        const gotoDisabled = isSkeleton;
+        const gotoDisabled = isSkeleton && !metaKnown;
         const closeDisabled = isSkeleton || isDead;
         const isCardPlaying = playingId === c.id;
         const expanded = expandedRows.has(c.id);
@@ -194,8 +201,8 @@ export default function ListView({
                 className="relative h-[52px] w-[52px] flex-none overflow-hidden bg-card"
                 style={{ cursor: playable ? "pointer" : "default" }}
               >
-                {isSkeleton && <div className="absolute inset-0 bg-card-skel animate-shimmer" />}
-                {!isSkeleton && c.artUrl && (
+                {isSkeleton && !c.artUrl && <div className="absolute inset-0 bg-card-skel animate-shimmer" />}
+                {c.artUrl && (
                   <img
                     src={c.artUrl}
                     alt=""
@@ -210,7 +217,7 @@ export default function ListView({
                 )}
               </div>
               <div className="flex min-w-0 flex-col gap-1 pt-[1px]">
-                {isSkeleton ? (
+                {isSkeleton && !metaKnown ? (
                   <div className="flex flex-col gap-[7px]">
                     <div className="h-[9px] w-[76%] animate-shimmer bg-card-skel" />
                     <div className="h-[9px] w-[54%] animate-shimmer bg-card-skel" />
@@ -228,8 +235,8 @@ export default function ListView({
                 <div className="flex-1" />
                 <div className="flex items-center gap-[14px] text-[13px] leading-none">
                   <span
-                    title={isDead ? "Reopen tab" : "Go to tab"}
-                    onClick={() => !gotoDisabled && (isDead ? onReopen(c) : onGoto(c))}
+                    title={isDead ? "Reopen tab" : tabBacked ? "Go to tab" : "Open on Bandcamp"}
+                    onClick={() => !gotoDisabled && (isDead ? onReopen?.(c) : onGoto(c))}
                     style={{
                       color: gotoDisabled ? "#413f3c" : "#8d8a85",
                       cursor: gotoDisabled ? "not-allowed" : "pointer",
@@ -237,16 +244,18 @@ export default function ListView({
                   >
                     <ExternalLink size={13} />
                   </span>
-                  <span
-                    title="Close tab"
-                    onClick={() => !closeDisabled && onClose(c)}
-                    style={{
-                      color: closeDisabled ? "#413f3c" : "#8d8a85",
-                      cursor: closeDisabled ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    <Trash2 size={13} />
-                  </span>
+                  {tabBacked && (
+                    <span
+                      title="Close tab"
+                      onClick={() => !closeDisabled && onClose?.(c)}
+                      style={{
+                        color: closeDisabled ? "#413f3c" : "#8d8a85",
+                        cursor: closeDisabled ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

@@ -29,6 +29,9 @@ export interface CardRecord {
   status: CardStatus;
   /** true only for a confirmed 404/410 — never retried again */
   permanentFailure: boolean;
+  /** transient failures so far; a release we can never reach (custom domain,
+   *  so outside host_permissions) is given up on rather than retried forever */
+  attempts: number;
   refreshedAt: number | null;
   order: number;
   /** moved out of the main grid/list into the Archive section via the "Clean" action */
@@ -56,3 +59,16 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
   listColumnOrder: ["title", "artist", "album", "bpm"],
   listColumnSizing: { title: 320, artist: 160, album: 160, bpm: 64 },
 };
+
+/** A band's whole catalogue, pulled from its /music page and played as one list.
+ *  Same CardRecord shape as the tab grid so the list view renders both — these
+ *  just never have a tabId. */
+export interface LabelCollection {
+  /** bandcamp host the grid was read from, e.g. "ninjatune.bandcamp.com" */
+  id: string;
+  url: string;
+  name: string;
+  /** one card per release, complete from the moment the collection is created —
+   *  the content script reads the whole grid off the page in one go */
+  cards: CardRecord[];
+}

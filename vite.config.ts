@@ -9,6 +9,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         grid: "src/grid/index.html",
+        label: "src/label/index.html",
       },
     },
   },

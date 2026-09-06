@@ -12,5 +12,7 @@
     "strict": true,
     "types": ["chrome"]
   },
-  "include": ["src", "manifest.json"]
+  "include": ["src", "manifest.json"],
+  // run under node, not bundled — see the header of the file
+  "exclude": ["src/**/*.check.ts"]
 }
