@@ -123,7 +123,9 @@ export function computeAnalysis(trackId: string, streamUrl: string, onReady: (re
 
   (async () => {
     try {
-      const res = await fetch(streamUrl);
+      // Low priority: this competes on the same host/connection as the <audio>
+      // element actually streaming the track — playback must win that race.
+      const res = await fetch(streamUrl, { priority: "low" } as RequestInit);
       const arrayBuffer = await res.arrayBuffer();
       const audioBuffer = await getContext().decodeAudioData(arrayBuffer);
       const channel = audioBuffer.getChannelData(0);

@@ -102,6 +102,7 @@ export default function ListView({
               <Scrobbler
                 peaks={waveforms[track.trackId] ?? null}
                 progress={isCurrent && dur > 0 ? pos / dur : 0}
+                hasRealProgress={isCurrent && dur > 0}
                 disabled={disabled}
                 onScrub={(fraction) => onScrub(card.id, track.trackId, fraction)}
               />

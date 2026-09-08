@@ -219,6 +219,10 @@ export function useGrid() {
 
   // Real waveform + BPM — one decode, only for the track that's actually
   // loaded right now, only once per track for the session (see waveform.ts).
+  // Cache hits apply immediately (free, no network); a fresh decode waits for
+  // `dur > 0` (the <audio> element's own metadata has loaded) so this fetch —
+  // for the SAME file the <audio> element is streaming — never races playback
+  // for the connection and starves the actual track load.
   useEffect(() => {
     const trackId = current?.selectedTrackId;
     const streamUrl = current?.streamUrl;
@@ -229,11 +233,12 @@ export function useGrid() {
       setBpms((prev) => (trackId in prev ? prev : { ...prev, [trackId]: cached.bpm }));
       return;
     }
+    if (dur === 0) return; // playback hasn't loaded metadata yet — let it win the connection first
     computeAnalysis(trackId, streamUrl, (result) => {
       setWaveforms((prev) => ({ ...prev, [trackId]: result.peaks }));
       setBpms((prev) => ({ ...prev, [trackId]: result.bpm }));
     });
-  }, [current?.selectedTrackId, current?.streamUrl]);
+  }, [current?.selectedTrackId, current?.streamUrl, dur]);
 
   const handleTimeUpdate = useCallback((t: number) => setPos(t), []);
 
