@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCollection, setCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange } from "../../lib/storage";
+import { getCollection, updateCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange } from "../../lib/storage";
 import type { CollectionKind } from "../../lib/storage";
 import type { CardRecord, LabelCollection, ListColumnId, UiConfig } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
@@ -50,19 +50,19 @@ export function useLabel() {
 
   const cards = collection?.cards ?? NO_CARDS;
 
-  /** Re-reads before writing: the background is writing tracklists into this
-   *  same collection while the user clicks around in it. */
+  /** Re-reads before writing, inside the serialized write chain: the background
+   *  is writing tracklists into this same collection while the user clicks
+   *  around in it, and a read-then-write pair would drop whatever landed
+   *  between the two. */
   const persistCard = useCallback(
     async (updated: CardRecord) => {
       setLocalCollection((prev) =>
         prev ? { ...prev, cards: prev.cards.map((c) => (c.id === updated.id ? updated : c)) } : prev
       );
-      const col = await getCollection(kind, id);
-      if (!col) return;
-      const idx = col.cards.findIndex((c) => c.id === updated.id);
-      if (idx === -1) return;
-      col.cards[idx] = updated;
-      await setCollection(kind, col);
+      await updateCollection(kind, id, (col) => ({
+        ...col,
+        cards: col.cards.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)),
+      }));
     },
     [kind, id]
   );

@@ -1,5 +1,5 @@
-import type { CardRecord, LabelCollection, PlaybackMode, UiConfig } from "./types";
-import { DEFAULT_UI_CONFIG } from "./types";
+import type { CardRecord, LabelCollection, PlaybackMode, UiConfig } from "./types.ts";
+import { DEFAULT_UI_CONFIG } from "./types.ts";
 
 const CARDS_KEY = "cards";
 const PLAYBACK_MODE_KEY = "playbackMode";
@@ -23,6 +23,34 @@ export async function getCards(): Promise<CardRecord[]> {
 
 export async function setCards(cards: CardRecord[]): Promise<void> {
   await chrome.storage.local.set({ [CARDS_KEY]: cards });
+}
+
+// chrome.storage has no atomic read-modify-write: a get/mutate/set pair is two
+// awaits wide, and anything that writes the same key in between is silently
+// overwritten. A sync extracting 100 tabs runs 100 of those pairs, so nearly
+// every update used to lose to whichever one wrote last. Every mutation of a
+// shared key goes through this chain instead, one at a time.
+//
+// ponytail: per-context chain — the grid page and the service worker each have
+// their own, so a page write racing a background write is still possible (just
+// vanishingly rarer: page writes are single user actions). Needs a real lock in
+// storage if that ever shows up.
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serialize<T>(job: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(job, job);
+  writeChain = run.catch(() => undefined);
+  return run;
+}
+
+/** Applies `mutate` to the freshest stored cards and persists the result.
+ *  Always re-reads inside the chain — never trust an array read earlier. */
+export function updateCards(mutate: (cards: CardRecord[]) => CardRecord[]): Promise<CardRecord[]> {
+  return serialize(async () => {
+    const next = mutate(await getCards());
+    await setCards(next);
+    return next;
+  });
 }
 
 export async function getPlaybackMode(): Promise<PlaybackMode> {
@@ -89,6 +117,23 @@ export async function getCollection(kind: CollectionKind, id: string): Promise<L
 
 export async function setCollection(kind: CollectionKind, col: LabelCollection): Promise<void> {
   await chrome.storage.local.set({ [collectionKey(kind, col.id)]: col });
+}
+
+/** `updateCards` for one collection — same chain, so a collection walk and a
+ *  tab sync writing at the same time can't clobber each other either. Mutating
+ *  a collection that's since been deleted is a no-op. */
+export function updateCollection(
+  kind: CollectionKind,
+  id: string,
+  mutate: (col: LabelCollection) => LabelCollection
+): Promise<LabelCollection | null> {
+  return serialize(async () => {
+    const col = await getCollection(kind, id);
+    if (!col) return null;
+    const next = mutate(col);
+    await setCollection(kind, next);
+    return next;
+  });
 }
 
 export function onCollectionChange(kind: CollectionKind, id: string, cb: (col: LabelCollection) => void) {
