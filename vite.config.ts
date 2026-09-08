@@ -6,6 +6,9 @@ import manifest from "./manifest.json";
 export default defineConfig({
   plugins: [react(), crx({ manifest })],
   build: {
+    // MV3 extension pages can't use cross-world modulepreload — crxjs's known
+    // quirk, harmless (scripts still load fine) but noisy in devtools.
+    modulePreload: false,
     rollupOptions: {
       input: {
         grid: "src/grid/index.html",
