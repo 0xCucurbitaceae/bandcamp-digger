@@ -1,4 +1,4 @@
-import type { CardRecord, PlaybackMode, UiConfig } from "./types";
+import type { CardRecord, LabelCollection, PlaybackMode, UiConfig } from "./types";
 import { DEFAULT_UI_CONFIG } from "./types";
 
 const CARDS_KEY = "cards";
@@ -12,6 +12,7 @@ function normalizeCard(c: CardRecord): CardRecord {
     tracks: c.tracks ?? [],
     selectedTrackId: c.selectedTrackId ?? null,
     archived: c.archived ?? false,
+    attempts: c.attempts ?? 0,
   };
 }
 
@@ -65,6 +66,34 @@ export function onStorageChange(
     if (changes[PLAYBACK_MODE_KEY]) out.playbackMode = changes[PLAYBACK_MODE_KEY].newValue as PlaybackMode;
     if (changes[UI_CONFIG_KEY]) out.uiConfig = normalizeUiConfig(changes[UI_CONFIG_KEY].newValue as Partial<UiConfig> | undefined);
     if (out.cards || out.playbackMode || out.uiConfig) cb(out);
+  };
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
+}
+
+// --- label collections ------------------------------------------------------
+// One storage key per label so a 600-release catalogue never rewrites (or wakes
+// listeners for) the tab-grid's `cards` key.
+
+const labelKey = (id: string) => `label:${id}`;
+
+export async function getLabel(id: string): Promise<LabelCollection | null> {
+  const key = labelKey(id);
+  const { [key]: col } = await chrome.storage.local.get(key);
+  const c = col as LabelCollection | undefined;
+  return c ? { ...c, cards: (c.cards ?? []).map(normalizeCard) } : null;
+}
+
+export async function setLabel(col: LabelCollection): Promise<void> {
+  await chrome.storage.local.set({ [labelKey(col.id)]: col });
+}
+
+export function onLabelChange(id: string, cb: (col: LabelCollection) => void) {
+  const key = labelKey(id);
+  const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area !== "local" || !changes[key]) return;
+    const c = changes[key].newValue as LabelCollection | undefined;
+    if (c) cb({ ...c, cards: (c.cards ?? []).map(normalizeCard) });
   };
   chrome.storage.onChanged.addListener(listener);
   return () => chrome.storage.onChanged.removeListener(listener);
