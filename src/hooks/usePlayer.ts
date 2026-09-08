@@ -42,6 +42,10 @@ export function usePlayer({ cards, ordered, persistCard, refreshTrack, onToast }
   const [pendingSeek, setPendingSeek] = useState<PendingSeek | null>(null);
   const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
   const [bpms, setBpms] = useState<Record<string, number | null>>({});
+  /** decoded lengths, only for tracks bandcamp gave no duration for — see the duration column */
+  const [durations, setDurations] = useState<Record<string, number>>({});
+  /** track ids whose analysis is queued or running — drives the "…" in the BPM column */
+  const [analyzing, setAnalyzing] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     getPlaybackMode().then(setPlaybackModeState);
@@ -139,28 +143,59 @@ export function usePlayer({ cards, ordered, persistCard, refreshTrack, onToast }
     if (audioRef.current) audioRef.current.volume = volume;
   }, [volume]);
 
-  // Real waveform + BPM — one decode, only for the track that's actually
-  // loaded right now, only once per track for the session (see waveform.ts).
-  // Cache hits apply immediately (free, no network); a fresh decode waits for
-  // `dur > 0` (the <audio> element's own metadata has loaded) so this fetch —
-  // for the SAME file the <audio> element is streaming — never races playback
-  // for the connection and starves the actual track load.
+  /** Queues one track's waveform+BPM. Cheap and idempotent — see waveform.ts. */
+  const analyze = useCallback((trackId: string, streamUrl: string, urgent = false) => {
+    setAnalyzing((prev) => (prev.has(trackId) ? prev : new Set(prev).add(trackId)));
+    computeAnalysis(
+      trackId,
+      streamUrl,
+      (result) => {
+        if (result) setWaveforms((prev) => ({ ...prev, [trackId]: result.peaks }));
+        setBpms((prev) => ({ ...prev, [trackId]: result?.bpm ?? null }));
+        if (result) setDurations((prev) => ({ ...prev, [trackId]: result.duration }));
+        setAnalyzing((prev) => {
+          if (!prev.has(trackId)) return prev;
+          const next = new Set(prev);
+          next.delete(trackId);
+          return next;
+        });
+      },
+      urgent
+    );
+  }, []);
+
+  /** Per-track magic wand — analyse one track without touching playback. */
+  const analyzeTrack = useCallback(
+    (cardId: string, trackId: string) => {
+      const track = cards.find((c) => c.id === cardId)?.tracks.find((t) => t.trackId === trackId);
+      if (track?.streamUrl) analyze(track.trackId, track.streamUrl);
+    },
+    [cards, analyze]
+  );
+
+  /** List view's magic wand: analyse every playable track of a release without touching playback. */
+  const analyzeCard = useCallback(
+    (cardId: string) => {
+      const card = cards.find((c) => c.id === cardId);
+      if (!card) return;
+      for (const t of card.tracks) if (t.streamUrl) analyze(t.trackId, t.streamUrl);
+    },
+    [cards, analyze]
+  );
+
+  // Real waveform + BPM for the track that's actually loaded right now, once
+  // per track for the session (see waveform.ts). Cache hits apply immediately
+  // (free, no network); a fresh decode waits for `dur > 0` (the <audio>
+  // element's own metadata has loaded) so this fetch — for the SAME file the
+  // <audio> element is streaming — never races playback for the connection and
+  // starves the actual track load. Urgent, so it jumps any wand-queued backlog.
   useEffect(() => {
     const trackId = current?.selectedTrackId;
     const streamUrl = current?.streamUrl;
     if (!trackId || !streamUrl) return;
-    const cached = getCachedAnalysis(trackId);
-    if (cached) {
-      setWaveforms((prev) => (prev[trackId] ? prev : { ...prev, [trackId]: cached.peaks }));
-      setBpms((prev) => (trackId in prev ? prev : { ...prev, [trackId]: cached.bpm }));
-      return;
-    }
-    if (dur === 0) return; // playback hasn't loaded metadata yet — let it win the connection first
-    computeAnalysis(trackId, streamUrl, (result) => {
-      setWaveforms((prev) => ({ ...prev, [trackId]: result.peaks }));
-      setBpms((prev) => ({ ...prev, [trackId]: result.bpm }));
-    });
-  }, [current?.selectedTrackId, current?.streamUrl, dur]);
+    if (dur === 0 && !getCachedAnalysis(trackId)) return; // let playback win the connection first
+    analyze(trackId, streamUrl, true);
+  }, [current?.selectedTrackId, current?.streamUrl, dur, analyze]);
 
   const handleTimeUpdate = useCallback((t: number) => setPos(t), []);
 
@@ -257,6 +292,10 @@ export function usePlayer({ cards, ordered, persistCard, refreshTrack, onToast }
     handleAudioError,
     waveforms,
     bpms,
+    durations,
+    analyzing,
+    analyzeCard,
+    analyzeTrack,
     scrollToPlaying,
   };
 }

@@ -53,6 +53,8 @@ export default function PlayerBar({
     <div className="group fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg">
       <audio
         ref={audioRef}
+        // start buffering the moment a stream URL is set, before the play() call lands
+        preload="auto"
         onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime)}
         onDurationChange={(e) => onDurationChange(e.currentTarget.duration || 0)}
         onEnded={onEnded}

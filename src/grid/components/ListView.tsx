@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Pause, Play, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Library, Pause, Play, Trash2, Wand2 } from "lucide-react";
 import type { CardRecord, ListColumnId, TrackRecord } from "../../lib/types";
 import Scrobbler from "./Scrobbler";
 
@@ -9,10 +9,16 @@ const TRACK_ROW_HEIGHT = 30; // approx height of one track row (py-[7px]*2 + lin
 const META_HEIGHT = 80; // left column's height (52px thumbnail + 14px top/bottom padding)
 const NO_ROWS: object[] = [];
 
+function formatDuration(seconds: number): string {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 const COLUMN_DEFS: ColumnDef<object>[] = [
   { id: "title", header: "Title", minSize: 200 },
   { id: "artist", header: "Artist", minSize: 90 },
   { id: "album", header: "Album", minSize: 90 },
+  { id: "duration", header: "Time", minSize: 48, maxSize: 100 },
   { id: "bpm", header: "BPM", minSize: 48, maxSize: 100 },
 ];
 
@@ -35,12 +41,22 @@ interface Props {
   dur: number;
   waveforms: Record<string, number[]>;
   bpms: Record<string, number | null>;
+  /** decoded lengths — only consulted for tracks whose bandcamp data had no duration */
+  durations: Record<string, number>;
+  /** track ids whose waveform/BPM analysis is queued or running */
+  analyzing: Set<string>;
   columnOrder: ListColumnId[];
   columnSizing: Partial<Record<ListColumnId, number>>;
   onColumnsChange: (order: ListColumnId[], sizing: Partial<Record<ListColumnId, number>>) => void;
   onPlay: (id: string) => void;
   onPlayTrack: (cardId: string, trackId: string) => void;
   onScrub: (cardId: string, trackId: string, fraction: number) => void;
+  /** magic wand — analyse every track of this release without playing anything */
+  onAnalyze: (cardId: string) => void;
+  /** magic wand on a single track row — same, for one track */
+  onAnalyzeTrack: (cardId: string, trackId: string) => void;
+  /** opens this release's artist/label's whole catalogue as a new collection */
+  onListenToArtist: (card: CardRecord) => void;
   onGoto: (card: CardRecord) => void;
   /** tab-grid only — a label collection's releases have no tab behind them */
   onClose?: (card: CardRecord) => void;
@@ -57,12 +73,17 @@ export default function ListView({
   dur,
   waveforms,
   bpms,
+  durations,
+  analyzing,
   columnOrder,
   columnSizing,
   onColumnsChange,
   onPlay,
   onPlayTrack,
   onScrub,
+  onAnalyze,
+  onAnalyzeTrack,
+  onListenToArtist,
   onGoto,
   onClose,
   onReopen,
@@ -130,14 +151,40 @@ export default function ListView({
             {card.album}
           </div>
         );
-      case "bpm": {
-        // Only ever computed for whichever track is actually loaded — blank for
-        // everything else until you play it (lazy, no upfront analysis pass).
-        const bpm = bpms[track.trackId];
-        const analyzing = isCurrent && bpm === undefined;
+      case "duration": {
+        // Free from data-tralbum at extraction time for anything scraped since
+        // this column existed; older cards (and releases bandcamp omits it on)
+        // fall back to the decode, which only happens if something analyses the
+        // track anyway — the wand, or playing it.
+        const seconds = track.duration ?? durations[track.trackId];
         return (
-          <div className="truncate text-xs" style={{ color: isDead ? "#5b5854" : "#8d8a85" }}>
-            {analyzing ? "…" : bpm == null ? "" : bpm}
+          <div className="truncate pr-2 text-xs tabular-nums" style={{ color: isDead ? "#5b5854" : "#8d8a85" }}>
+            {seconds == null ? (analyzing.has(track.trackId) ? "…" : "") : formatDuration(seconds)}
+          </div>
+        );
+      }
+      case "bpm": {
+        // Computed only for whichever track is actually loaded, plus whatever
+        // the magic wand asks for — blank for everything else (no upfront pass).
+        const bpm = bpms[track.trackId];
+        const pending = analyzing.has(track.trackId);
+        return (
+          <div className="flex items-center gap-2 pr-2 text-xs" style={{ color: isDead ? "#5b5854" : "#8d8a85" }}>
+            <span className="flex-1 truncate">{pending ? "…" : bpm == null ? "" : bpm}</span>
+            {/* Nothing to load once it has a value, so the wand only offers itself
+                on tracks that have never been analysed. */}
+            {!pending && bpm === undefined && track.streamUrl && (
+              <span
+                title="Load waveform + BPM for this track (doesn't play)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAnalyzeTrack(card.id, track.trackId);
+                }}
+                className="flex-none cursor-pointer opacity-0 hover:text-accent group-hover:opacity-100"
+              >
+                <Wand2 size={11} />
+              </span>
+            )}
           </div>
         );
       }
@@ -178,16 +225,22 @@ export default function ListView({
       </div>
       {cards.map((c) => {
         const isSkeleton = c.status === "pending";
-        // A label release is known (art, title, artist) before its tracklist is —
-        // only shimmer the meta block when we genuinely have nothing yet.
-        const metaKnown = !!c.album;
-        const isDead = tabBacked && !isSkeleton && c.tabId === null;
+        // A label/wishlist release is known (art, title, artist) before its
+        // tracklist is; a tab-grid card at least has the tab's own page title
+        // captured at snapshot time — either is enough to stop shimmering.
+        const metaKnown = !!(c.album || c.title);
+        // Dead = tab closed. Independent of extraction status — a card can be
+        // both still-pending AND dead (closed before it ever loaded), and it's
+        // exactly those that most need a working "reopen" instead of being stuck.
+        const isDead = tabBacked && c.tabId === null;
         const isUnplayable = c.status === "unplayable" || c.status === "error";
         const playable = c.status === "ready";
-        const gotoDisabled = isSkeleton && !metaKnown;
-        const closeDisabled = isSkeleton || isDead;
+        const gotoDisabled = isSkeleton && !metaKnown && !isDead;
+        const closeDisabled = isDead;
         const isCardPlaying = playingId === c.id;
         const expanded = expandedRows.has(c.id);
+        const analyzeDisabled = !c.tracks.some((t) => t.streamUrl);
+        const cardAnalyzing = c.tracks.some((t) => analyzing.has(t.trackId));
 
         return (
           <div
@@ -218,7 +271,11 @@ export default function ListView({
                 )}
               </div>
               <div className="flex min-w-0 flex-col gap-1 pt-[1px]">
-                {isSkeleton && !metaKnown ? (
+                {isSkeleton && !metaKnown && isDead ? (
+                  // Closed before the tab even had a title to capture — nothing
+                  // is loading, so don't shimmer as if it were.
+                  <div className="truncate text-xs text-[#5b5854]">Unknown release — tab closed</div>
+                ) : isSkeleton && !metaKnown ? (
                   <div className="flex flex-col gap-[7px]">
                     <div className="h-[9px] w-[76%] animate-shimmer bg-card-skel" />
                     <div className="h-[9px] w-[54%] animate-shimmer bg-card-skel" />
@@ -245,6 +302,27 @@ export default function ListView({
                   >
                     <ExternalLink size={13} />
                   </span>
+                  <span
+                    title={
+                      analyzeDisabled
+                        ? "No playable tracks to analyse"
+                        : "Load waveforms + BPM for every track (doesn't play)"
+                    }
+                    onClick={() => !analyzeDisabled && onAnalyze(c.id)}
+                    style={{
+                      color: analyzeDisabled ? "#413f3c" : cardAnalyzing ? "#1da0c3" : "#8d8a85",
+                      cursor: analyzeDisabled ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    <Wand2 size={13} className={cardAnalyzing ? "animate-pulse" : undefined} />
+                  </span>
+                  <span
+                    title="Listen to this artist's whole catalogue"
+                    onClick={() => onListenToArtist(c)}
+                    className="cursor-pointer text-[#8d8a85] hover:text-text"
+                  >
+                    <Library size={13} />
+                  </span>
                   {tabBacked && (
                     <span
                       title="Close tab"
@@ -265,7 +343,11 @@ export default function ListView({
               className="relative flex flex-1 flex-col justify-center overflow-x-auto py-2"
               style={{ minHeight: META_HEIGHT }}
             >
-              {isSkeleton ? (
+              {isSkeleton && isDead ? (
+                // Closed before it ever loaded — nothing is actively fetching,
+                // so an animated shimmer here would be a lie. Static instead.
+                <div className="py-[7px] text-xs text-[#5b5854]">Tab closed before this loaded — reopen to fetch its tracks</div>
+              ) : isSkeleton ? (
                 <div className="flex items-center gap-4 py-[7px]">
                   <div className="w-[26px] flex-none" />
                   <div className="w-[34px] flex-none" />
@@ -284,16 +366,20 @@ export default function ListView({
                         <div
                           key={t.trackId}
                           onClick={() => !disabled && onPlayTrack(c.id, t.trackId)}
-                          className="flex items-center gap-4 py-[7px] hover:bg-white/[0.035]"
+                          className="group flex items-center gap-4 py-[7px] hover:bg-white/[0.035]"
                           style={{
                             background: isCurrent ? "rgba(29,160,195,.07)" : "transparent",
                             cursor: disabled ? "not-allowed" : "pointer",
                           }}
                         >
-                          <div className="w-[26px] flex-none text-right text-[11px]" style={{ color: isCurrent ? "#1da0c3" : "#5b5854" }}>
+                          <div className="w-[26px] flex-none text-right text-[11px]" style={{ color: isCurrent ? "#1da0c3" : "#8d8a85" }}>
                             {i + 1}
                           </div>
-                          <div className="w-[34px] flex-none text-center text-accent" style={{ opacity: isCurrent ? 1 : 0 }}>
+                          <div
+                            className={`w-[34px] flex-none text-center text-accent ${
+                              isCurrent ? "opacity-100" : disabled ? "opacity-0" : "opacity-0 group-hover:opacity-60"
+                            }`}
+                          >
                             {isCurrent && isAudioPlaying ? (
                               <Pause size={9} fill="currentColor" className="mx-auto" />
                             ) : (

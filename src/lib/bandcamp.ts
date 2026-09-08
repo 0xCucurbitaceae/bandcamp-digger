@@ -7,6 +7,8 @@ export interface TralbumTrack {
   trackId: string;
   title: string;
   streamUrl: string | null;
+  /** seconds, straight off data-tralbum — null when bandcamp omits it */
+  duration: number | null;
 }
 
 export interface TralbumData {
@@ -23,6 +25,7 @@ export interface TralbumData {
 interface RawTrackInfo {
   track_id?: number | string;
   title?: string;
+  duration?: number;
   file?: { "mp3-128"?: string };
 }
 
@@ -33,6 +36,7 @@ interface RawTralbum {
     title?: string;
     track_id?: number | string;
     art_id?: number | string;
+    duration?: number;
     file?: { "mp3-128"?: string };
   };
   trackinfo?: RawTrackInfo[];
@@ -69,6 +73,7 @@ export function parseTralbum(blob: RawTralbum): TralbumData | null {
       trackId: String(t.track_id),
       title: t.title ?? "",
       streamUrl: t.file?.["mp3-128"] ?? null,
+      duration: typeof t.duration === "number" ? t.duration : null,
     }));
 
   // A standalone /track/ page's `trackinfo` is sometimes empty (or missing this
@@ -81,6 +86,7 @@ export function parseTralbum(blob: RawTralbum): TralbumData | null {
           trackId: String(current.track_id),
           title: current.title ?? "",
           streamUrl: current.file?.["mp3-128"] ?? null,
+          duration: typeof current.duration === "number" ? current.duration : null,
         }
       : null;
   if (currentTrack && !tracks.some((t) => t.trackId === currentTrack.trackId)) {
@@ -118,7 +124,7 @@ export function parseFromDom(doc: Document): TralbumData | null {
   }
 }
 
-const BROWSER_HEADERS = {
+export const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   Accept:

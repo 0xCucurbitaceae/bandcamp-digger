@@ -135,3 +135,80 @@ export function readDiscography(doc: Document, origin: string): Discography | nu
   const items = normalizeItems([...readGridItems(grid), ...readClientItems(doc)], bandName, origin);
   return { bandName, items };
 }
+
+// --- background-fetchable variant: same two shapes, read via regex instead of
+// DOM (a service worker has no document). Bandcamp's /music page is plain
+// server-rendered HTML — verified live that both the <li> grid and the
+// data-client-items blob are present in the raw fetch, unlike a release
+// page's data-tralbum, which needs no such check since fetchExtract already
+// proved that pattern works. This lets "see this artist's whole catalogue"
+// be triggered from anywhere a release URL is known, with no tab required. --
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]*>/g, " ");
+}
+
+function extractLiBlocksFromHtml(html: string, decodeEntities: (s: string) => string): RawItem[] {
+  const items: RawItem[] = [];
+  const liRe = /<li[^>]*\bdata-item-id="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g;
+  let m: RegExpExecArray | null;
+  while ((m = liRe.exec(html))) {
+    const kind = m[1].split("-")[0];
+    const inner = m[2];
+    const href = /<a[^>]*\bhref="([^"]*)"/.exec(inner)?.[1] ?? "";
+    const titleBlock = /<p[^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*>([\s\S]*?)<\/p>/.exec(inner)?.[1] ?? "";
+    const artistMatch = /<span[^>]*\bclass="[^"]*artist-override[^"]*"[^>]*>([\s\S]*?)<\/span>/.exec(titleBlock);
+    const artist = artistMatch ? decodeEntities(stripTags(artistMatch[1])).trim() : null;
+    const titleHtml = artistMatch ? titleBlock.replace(artistMatch[0], "") : titleBlock;
+    const img = /<img[^>]*\bdata-original="([^"]*)"/.exec(inner) ?? /<img[^>]*\bsrc="([^"]*)"/.exec(inner);
+    items.push({
+      pageUrl: decodeEntities(href),
+      title: decodeEntities(stripTags(titleHtml)).trim(),
+      artist,
+      artUrl: img?.[1] ?? null,
+      kind,
+    });
+  }
+  return items;
+}
+
+function extractClientItemsFromHtml(html: string, decodeEntities: (s: string) => string): RawItem[] {
+  const raw = /data-client-items="([^"]*)"/.exec(html)?.[1];
+  if (!raw) return [];
+  let items: Array<Record<string, unknown>>;
+  try {
+    items = JSON.parse(decodeEntities(raw));
+  } catch {
+    return [];
+  }
+  return items.map((i) => ({
+    pageUrl: String(i.page_url ?? ""),
+    title: String(i.title ?? ""),
+    artist: i.artist ? String(i.artist) : null,
+    artUrl: artUrlFromId(i.art_id as number | string | undefined),
+    kind: i.type ? String(i.type) : undefined,
+  }));
+}
+
+function extractBandNameFromHtml(html: string, decodeEntities: (s: string) => string): string {
+  const raw = /data-band="([^"]*)"/.exec(html)?.[1];
+  if (!raw) return "";
+  try {
+    return (JSON.parse(decodeEntities(raw)) as { name?: string }).name ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Same extraction as `readDiscography`, but off raw HTML text — for the
+ *  background, which has no DOM. null when the page has no release grid. */
+export function parseDiscographyHtml(html: string, origin: string, decodeEntities: (s: string) => string): Discography | null {
+  if (!html.includes('id="music-grid"')) return null;
+  const bandName = extractBandNameFromHtml(html, decodeEntities);
+  const items = normalizeItems(
+    [...extractLiBlocksFromHtml(html, decodeEntities), ...extractClientItemsFromHtml(html, decodeEntities)],
+    bandName,
+    origin
+  );
+  return { bandName, items };
+}

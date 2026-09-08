@@ -5,6 +5,10 @@ export interface TrackRecord {
   title: string;
   /** null = bandcamp has no public stream for this track (still shown, marked unplayable) */
   streamUrl: string | null;
+  /** length in seconds, read off data-tralbum at extraction time. null on
+   *  releases bandcamp doesn't publish it for (and on cards stored before this
+   *  field existed) — the list view falls back to the decoded stream. */
+  duration: number | null;
 }
 
 export interface CardRecord {
@@ -43,7 +47,7 @@ export type PlaybackMode = "single" | "album";
 export type ViewMode = "grid" | "list";
 
 /** List-view's resizable/reorderable data columns (the fixed num/play gutter isn't one of these). */
-export type ListColumnId = "title" | "artist" | "album" | "bpm";
+export type ListColumnId = "title" | "artist" | "album" | "duration" | "bpm";
 
 /** Persisted screen state — so reopening the grid page looks like how it was left. */
 export interface UiConfig {
@@ -56,8 +60,8 @@ export interface UiConfig {
 export const DEFAULT_UI_CONFIG: UiConfig = {
   view: "grid",
   archiveOpen: false,
-  listColumnOrder: ["title", "artist", "album", "bpm"],
-  listColumnSizing: { title: 320, artist: 160, album: 160, bpm: 64 },
+  listColumnOrder: ["title", "artist", "album", "duration", "bpm"],
+  listColumnSizing: { title: 320, artist: 160, album: 160, duration: 64, bpm: 64 },
 };
 
 /** A band's whole catalogue, pulled from its /music page and played as one list.
@@ -72,3 +76,7 @@ export interface LabelCollection {
    *  the content script reads the whole grid off the page in one go */
   cards: CardRecord[];
 }
+
+/** A fan's wishlist. Same shape as a label collection — `id` is the fan's
+ *  bandcamp username instead of a label host. */
+export type WishlistCollection = LabelCollection;

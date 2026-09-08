@@ -94,12 +94,17 @@ export default function App() {
           dur={g.dur}
           waveforms={g.waveforms}
           bpms={g.bpms}
+          durations={g.durations}
+          analyzing={g.analyzing}
           columnOrder={g.listColumnOrder}
           columnSizing={g.listColumnSizing}
           onColumnsChange={g.setListColumns}
           onPlay={(id) => g.play(id)}
           onPlayTrack={(id, trackId) => g.play(id, trackId)}
           onScrub={g.scrubTrack}
+          onAnalyze={g.analyzeCard}
+          onAnalyzeTrack={g.analyzeTrack}
+          onListenToArtist={g.listenToArtist}
           onGoto={g.goto}
           onClose={g.closeTab}
           onReopen={g.reopenTab}

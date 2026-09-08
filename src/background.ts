@@ -1,7 +1,9 @@
-import { parseTralbum, fetchExtract } from "./lib/bandcamp";
+import { parseTralbum, fetchExtract, decodeEntities, BROWSER_HEADERS } from "./lib/bandcamp";
 import type { TralbumData } from "./lib/bandcamp";
+import { parseDiscographyHtml } from "./lib/discography";
 import type { DiscographyItem } from "./lib/discography";
-import { getCards, setCards, getLabel, setLabel } from "./lib/storage";
+import { getCards, setCards, getCollection, setCollection } from "./lib/storage";
+import type { CollectionKind } from "./lib/storage";
 import type { CardRecord } from "./lib/types";
 
 const BANDCAMP_MATCH = "*://*.bandcamp.com/*";
@@ -11,6 +13,10 @@ const FETCH_STAGGER_MS = 2000;
 const MAX_ATTEMPTS = 3;
 
 chrome.action.onClicked.addListener(() => openGrid());
+
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("src/welcome/index.html") });
+});
 
 // Every outbound bandcamp fetch — tab sync and label catalogue loads alike —
 // goes through one chain so the 2s stagger is global. Two surfaces each doing
@@ -123,11 +129,12 @@ async function extractOne(card: CardRecord, tab: chrome.tabs.Tab | undefined): P
  * track was actually selected/playing is restored afterward with just its
  * refreshed streamUrl — the user's manual track choice isn't lost.
  *
- * `labelId` selects the store: a label collection's releases carry the same
- * signed URLs and expire the same way, so they get the same recovery.
+ * `collectionKind`+`collectionId` selects the store: a label or wishlist
+ * collection's releases carry the same signed URLs and expire the same way,
+ * so they get the same recovery.
  */
-async function refreshTrack(cardId: string, labelId?: string): Promise<void> {
-  const cards = labelId ? (await getLabel(labelId))?.cards ?? [] : await getCards();
+async function refreshTrack(cardId: string, collectionKind?: CollectionKind, collectionId?: string): Promise<void> {
+  const cards = collectionId && collectionKind ? (await getCollection(collectionKind, collectionId))?.cards ?? [] : await getCards();
   const card = cards.find((c) => c.id === cardId);
   if (!card) return;
 
@@ -152,8 +159,8 @@ async function refreshTrack(cardId: string, labelId?: string): Promise<void> {
     ? { ...refreshed, selectedTrackId: kept.trackId, track: kept.title, trackId: kept.trackId, streamUrl: kept.streamUrl }
     : refreshed;
 
-  if (labelId) {
-    await applyLabelCard(labelId, merged);
+  if (collectionId && collectionKind) {
+    await applyCollectionCard(collectionKind, collectionId, merged);
     return;
   }
   const latest = await getCards();
@@ -243,17 +250,20 @@ async function sync() {
   }
 }
 
-// --- label catalogue --------------------------------------------------------
+// --- label catalogues & wishlists --------------------------------------------
+// Both are just a named batch of releases (label discography, fan wishlist) —
+// same CardRecord shape, same one-page-per-collection storage. See
+// storage.ts's CollectionKind for the two supported kinds.
 
-/** Rewrites one card inside a label collection, re-reading first so concurrent
+/** Rewrites one card inside a collection, re-reading first so concurrent
  *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
-async function applyLabelCard(labelId: string, updated: CardRecord) {
-  const col = await getLabel(labelId);
+async function applyCollectionCard(kind: CollectionKind, id: string, updated: CardRecord) {
+  const col = await getCollection(kind, id);
   if (!col) return;
   const idx = col.cards.findIndex((c) => c.id === updated.id);
   if (idx === -1) return;
   col.cards[idx] = { ...col.cards[idx], ...updated };
-  await setLabel(col);
+  await setCollection(kind, col);
 }
 
 function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
@@ -281,45 +291,82 @@ function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
 }
 
 /**
- * Stores the catalogue the content script read off the page and opens the label
- * page on it. Re-clicking the button refreshes the release list while keeping
- * every tracklist already fetched — reloading those would cost another full walk.
+ * Stores the batch of releases the content script read off the page (a
+ * label/artist discography grid, or a fan's wishlist) and opens the
+ * collection page on it. Re-clicking the button refreshes the release list
+ * while keeping every tracklist already fetched — reloading those would cost
+ * another full walk.
  */
-async function openLabel(id: string, url: string, name: string, items: DiscographyItem[]) {
-  const existing = await getLabel(id);
+async function openCollection(kind: CollectionKind, id: string, url: string, name: string, items: DiscographyItem[]) {
+  const existing = await getCollection(kind, id);
   const byUrl = new Map((existing?.cards ?? []).map((c) => [c.url, c]));
   const cards = items.map((item, i) => {
     const prev = byUrl.get(item.url);
     return prev ? { ...prev, order: i } : cardFromRelease(item, i);
   });
 
-  await setLabel({ id, url, name, cards });
-  const pageUrl = chrome.runtime.getURL(`src/label/index.html?id=${encodeURIComponent(id)}`);
+  await setCollection(kind, { id, url, name, cards });
+  const pageUrl = chrome.runtime.getURL(
+    `src/label/index.html?id=${encodeURIComponent(id)}&kind=${kind}`
+  );
   const open = await chrome.tabs.query({ url: pageUrl });
   if (open[0]?.id) await chrome.tabs.update(open[0].id, { active: true });
   else await chrome.tabs.create({ url: pageUrl });
 }
 
-// Labels already being walked, so the page's resume kick doesn't queue twice.
-const loadingLabels = new Set<string>();
+/**
+ * "Listen to this artist's whole catalogue" from anywhere a release URL is
+ * known — the same thing the content script's injected button does, minus
+ * needing to actually visit the artist's page first. Bandcamp's /music page
+ * is plain server-rendered HTML (verified live), so this is a background
+ * fetch + regex parse (`parseDiscographyHtml`), same shape as `fetchExtract`.
+ */
+async function fetchDiscographyFor(releaseUrl: string): Promise<{ id: string; url: string; name: string; items: DiscographyItem[] } | null> {
+  let origin: string;
+  try {
+    origin = new URL(releaseUrl).origin;
+  } catch {
+    return null;
+  }
+
+  for (const path of ["/music", "/"]) {
+    let res: Response;
+    try {
+      res = await fetch(origin + path, { headers: BROWSER_HEADERS, redirect: "follow" });
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const html = await res.text();
+    const disco = parseDiscographyHtml(html, origin, decodeEntities);
+    if (disco && disco.items.length > 0) {
+      return { id: new URL(origin).host, url: origin, name: disco.bandName || new URL(origin).host, items: disco.items };
+    }
+  }
+  return null;
+}
+
+// Collections already being walked, so the page's resume kick doesn't queue twice.
+const loadingCollections = new Set<string>();
 
 /** Walks the releases that still have no tracklist. Resumable by design: the
  *  page re-kicks this every 60s in case the service worker was torn down. */
-async function loadLabel(id: string) {
-  if (loadingLabels.has(id)) return;
-  const col = await getLabel(id);
+async function loadCollection(kind: CollectionKind, id: string) {
+  const loadKey = `${kind}:${id}`;
+  if (loadingCollections.has(loadKey)) return;
+  const col = await getCollection(kind, id);
   if (!col) return;
-  loadingLabels.add(id);
+  loadingCollections.add(loadKey);
   try {
     const pending = col.cards.filter(
       (c) => c.status === "pending" && !c.permanentFailure && c.attempts < MAX_ATTEMPTS
     );
     for (const c of pending) {
       const updated = await enqueueFetch(() => extractOne(c, undefined));
-      await applyLabelCard(id, updated);
+      await applyCollectionCard(kind, id, updated);
     }
   } finally {
-    loadingLabels.delete(id);
+    loadingCollections.delete(loadKey);
   }
 }
 
@@ -328,21 +375,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sync().then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
   }
-  if (msg?.type === "loadLabel" && typeof msg.id === "string") {
-    // Fire-and-forget: this can run for minutes on a big catalogue, and the
-    // page follows along through storage changes.
-    loadLabel(msg.id);
+  if (msg?.type === "loadCollection" && typeof msg.id === "string") {
+    // Fire-and-forget: this can run for minutes on a big catalogue/wishlist,
+    // and the page follows along through storage changes.
+    loadCollection(msg.kind === "wishlist" ? "wishlist" : "label", msg.id);
     sendResponse({ ok: true });
     return false;
   }
   if (msg?.type === "openLabel") {
-    openLabel(msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    openCollection("label", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg?.type === "openWishlist") {
+    openCollection("wishlist", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg?.type === "openLabelFromRelease" && typeof msg.url === "string") {
+    // Triggered from a single release row (list view) rather than the artist's
+    // own page — fetches that artist's catalogue in the background first.
+    fetchDiscographyFor(msg.url).then((disco) => {
+      if (disco) openCollection("label", disco.id, disco.url, disco.name, disco.items).then(() => sendResponse({ ok: true }));
+      else sendResponse({ ok: false });
+    });
     return true;
   }
   if (msg?.type === "refreshTrack" && msg.cardId) {
-    // `labelId` routes the refreshed card back to a label collection instead of
-    // the tab grid — the label page's releases expire exactly the same way.
-    refreshTrack(msg.cardId, msg.labelId).then(() => sendResponse({ ok: true }));
+    // `collectionKind`+`collectionId` route the refreshed card back to a
+    // label/wishlist collection instead of the tab grid — those releases
+    // expire exactly the same way.
+    refreshTrack(msg.cardId, msg.collectionKind, msg.collectionId).then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;

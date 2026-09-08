@@ -43,7 +43,9 @@ export default function App() {
 
       {!l.loaded ? null : total === 0 ? (
         <div className="px-11 py-16 text-sm text-subtext">
-          Nothing here — open a Bandcamp label or artist page and hit “Listen to all”.
+          {l.kind === "wishlist"
+            ? "Nothing here — open your Bandcamp wishlist and hit “Listen to wishlist”."
+            : "Nothing here — open a Bandcamp label or artist page and hit “Listen to all”."}
         </div>
       ) : (
         <ListView
@@ -55,12 +57,17 @@ export default function App() {
           dur={l.dur}
           waveforms={l.waveforms}
           bpms={l.bpms}
+          durations={l.durations}
+          analyzing={l.analyzing}
           columnOrder={l.listColumnOrder}
           columnSizing={l.listColumnSizing}
           onColumnsChange={l.setListColumns}
           onPlay={(id) => l.play(id)}
           onPlayTrack={(id, trackId) => l.play(id, trackId)}
           onScrub={l.scrubTrack}
+          onAnalyze={l.analyzeCard}
+          onAnalyzeTrack={l.analyzeTrack}
+          onListenToArtist={l.listenToArtist}
           onGoto={l.openRelease}
         />
       )}

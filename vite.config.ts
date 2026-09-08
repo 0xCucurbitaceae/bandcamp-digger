@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         grid: "src/grid/index.html",
         label: "src/label/index.html",
+        welcome: "src/welcome/index.html",
       },
     },
   },

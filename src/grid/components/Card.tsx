@@ -31,11 +31,15 @@ export default function Card({
   onDrop,
 }: Props) {
   const isSkeleton = card.status === "pending";
-  const isDead = !isSkeleton && card.tabId === null;
+  // A card can be both still-pending AND dead (tab closed before it ever
+  // loaded) — those two aren't mutually exclusive, and it's exactly that
+  // combo that most needs a working "reopen" instead of being stuck inert.
+  const isDead = card.tabId === null;
+  const metaKnown = !!(card.album || card.title);
   const isUnplayable = card.status === "unplayable" || card.status === "error";
   const playable = card.status === "ready";
-  const gotoDisabled = isSkeleton;
-  const closeDisabled = isSkeleton || isDead;
+  const gotoDisabled = isSkeleton && !metaKnown && !isDead;
+  const closeDisabled = isDead;
   const hasMultipleTracks = card.tracks.length > 1;
 
   return (
@@ -52,9 +56,9 @@ export default function Card({
         className="relative aspect-square overflow-hidden bg-card"
         style={{ outline: isPlaying ? "1px solid #1da0c3" : isOver ? "1px solid #4d4b47" : "none" }}
       >
-        {isSkeleton && <div className="absolute inset-0 bg-card-skel animate-shimmer" />}
+        {isSkeleton && !card.artUrl && <div className="absolute inset-0 bg-card-skel animate-shimmer" />}
 
-        {!isSkeleton && card.artUrl && (
+        {card.artUrl && (
           <img
             src={card.artUrl}
             alt=""
@@ -102,7 +106,11 @@ export default function Card({
         )}
       </div>
 
-      {isSkeleton ? (
+      {isSkeleton && !metaKnown && isDead ? (
+        // Closed before the tab even had a title to capture — nothing is
+        // loading, so don't shimmer as if it were.
+        <div className="truncate text-xs text-[#5b5854]">Unknown release — tab closed</div>
+      ) : isSkeleton && !metaKnown ? (
         <div className="flex flex-col gap-[7px]">
           <div className="h-[9px] w-[58%] animate-shimmer bg-card-skel" />
           <div className="h-[9px] w-[80%] animate-shimmer bg-card-skel" />

@@ -185,6 +185,18 @@ export function useGrid() {
     }
   }, [cards, playingId, setPlayingId, setIsPlaying]);
 
+  /** Same as the injected page's "Listen to all" button, triggered from a
+   *  single release row instead — fetches that artist's whole catalogue in
+   *  the background and opens it as a label collection. */
+  const listenToArtist = useCallback(
+    async (card: CardRecord) => {
+      toast("Reading artist's catalogue…");
+      const res = await chrome.runtime.sendMessage({ type: "openLabelFromRelease", url: card.url });
+      if (!res?.ok) toast("Couldn't read that artist's catalogue");
+    },
+    [toast]
+  );
+
   /** Permanently deletes an archived card — the only true delete left in the app. */
   const removeArchived = useCallback((id: string) => {
     setCardsState((prev) => {
@@ -217,6 +229,7 @@ export function useGrid() {
     goto,
     reopenTab,
     closeTab,
+    listenToArtist,
     archiveDead,
     removeArchived,
     settingsOpen,

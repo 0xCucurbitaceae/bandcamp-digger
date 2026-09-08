@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome — Bandcamp Tab Merger</title>
+    <style>
+      body { margin: 0; background: #131313; color: #f0efed; font: 15px/1.55 system-ui, -apple-system, sans-serif; }
+      main { max-width: 880px; margin: 0 auto; padding: 56px 32px 96px; }
+      header { display: flex; align-items: center; gap: 18px; margin-bottom: 8px; }
+      header img { width: 56px; height: 56px; }
+      h1 { margin: 0; font-size: 26px; letter-spacing: .01em; }
+      .tagline { margin: 0 0 48px; font-size: 17px; color: #8d8a85; }
+      h2 { margin: 56px 0 18px; font-size: 13px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #6d6a66; }
+      ol { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+      ol li { counter-increment: step; }
+      ol li::before { content: counter(step); display: block; width: 26px; height: 26px; border-radius: 50%; margin-bottom: 10px; background: #1da0c3; color: #fff; font-size: 13px; font-weight: 600; line-height: 26px; text-align: center; }
+      ol strong { display: block; margin-bottom: 4px; }
+      ol li, .feature p { color: #8d8a85; }
+      ol strong, .feature strong { color: #f0efed; }
+      .shot { display: block; width: 100%; margin: 28px 0 0; border: 1px solid #262524; border-radius: 6px; }
+      .features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px 36px; }
+      .feature p { margin: 4px 0 0; }
+      .cta { display: flex; gap: 12px; margin-top: 48px; }
+      .cta a { display: inline-block; padding: 11px 18px; border-radius: 4px; font-weight: 500; text-decoration: none; }
+      .cta a.primary { background: #1da0c3; color: #fff; }
+      .cta a.secondary { border: 1px solid #262524; color: #f0efed; }
+      .cta a:hover { filter: brightness(1.15); }
+      .note { margin-top: 28px; font-size: 13px; color: #6d6a66; }
+      kbd { padding: 1px 6px; border: 1px solid #262524; border-radius: 3px; background: #1b1a19; font: inherit; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="/icon128.png" alt="" />
+        <h1>Bandcamp Tab Merger</h1>
+      </header>
+      <p class="tagline">Every Bandcamp tab you have open, on one page, with one player.</p>
+
+      <h2>How it works</h2>
+      <ol>
+        <li><strong>Open some releases</strong> Browse Bandcamp like you normally do and leave the albums you want to hear open in tabs.</li>
+        <li><strong>Click the extension icon</strong> It builds a merged page from every open Bandcamp tab. Pin it from the <kbd>puzzle-piece</kbd> menu so it's always one click away.</li>
+        <li><strong>Press play</strong> One player runs straight through the whole queue. Come back any time, the page keeps itself in sync with your tabs.</li>
+      </ol>
+      <img class="shot" src="/welcome/grid.webp" alt="The merged grid: album covers from ten open tabs with a shared player at the bottom" />
+
+      <h2>What it can do</h2>
+      <div class="features">
+        <div class="feature"><strong>Grid or list</strong><p>Browse covers, or switch to a dense list with resizable, reorderable columns and a lazily computed BPM per track.</p></div>
+        <div class="feature"><strong>One queue</strong><p>Play one track per release or full albums. Drag cards to reorder, expand any release to jump to a specific track.</p></div>
+        <div class="feature"><strong>Sleeping tabs still play</strong><p>Tabs your browser has put to sleep show up and stay playable. The extension never wakes a tab just to read it.</p></div>
+        <div class="feature"><strong>Tab-aware</strong><p>Jump to a release's tab, close it (it stays playable from cache), reopen it, or archive closed tabs out of the way.</p></div>
+        <div class="feature"><strong>Listen to a whole label</strong><p>On any artist or label page a <em>Listen to all</em> button appears above the release grid. It loads the entire catalogue into the same player.</p></div>
+        <div class="feature"><strong>Nothing leaves your browser</strong><p>No account, no analytics, no server. It streams the same public files Bandcamp's own player uses.</p></div>
+      </div>
+      <img class="shot" src="/welcome/list.webp" alt="List view with expanded tracklists, waveforms and BPM" />
+      <img class="shot" src="/welcome/label.webp" alt="A label's full catalogue loading into the player" />
+
+      <div class="cta">
+        <a class="primary" href="../grid/index.html">Open the merged page</a>
+        <a class="secondary" href="https://bandcamp.com/discover" target="_blank" rel="noreferrer">Go to Bandcamp</a>
+      </div>
+      <p class="note">This page only opens once, right after install. You can always get back to the merged page by clicking the extension icon.</p>
+    </main>
+  </body>
+</html>

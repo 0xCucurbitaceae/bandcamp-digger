@@ -1,8 +1,8 @@
-// Real waveform + BPM, decoded from the actual stream — computed lazily, only
-// for whichever track is currently loaded (decoding a full MP3 up front for
-// every track in the grid would be wasteful). One fetch + one decode per
-// track serves both the scrobbler's waveform and the BPM column, so adding
-// BPM doesn't double the network/CPU cost.
+// Real waveform + BPM, decoded from the actual stream. Analysis is never
+// automatic for the whole grid — it runs for whichever track is currently
+// loaded, plus whatever the list view's magic wand asks for on demand. One
+// fetch + one decode per track serves both the scrobbler's waveform and the
+// BPM column, so adding BPM doesn't double the network/CPU cost.
 
 const BUCKETS = 64;
 
@@ -10,10 +10,25 @@ export interface AudioAnalysis {
   peaks: number[];
   /** null when confident beat detection failed (e.g. ambient/non-rhythmic track) */
   bpm: number | null;
+  /** seconds — free from the decode, the fallback for tracks bandcamp gave no duration for */
+  duration: number;
 }
 
 const cache = new Map<string, AudioAnalysis>();
-const inFlight = new Set<string>();
+
+// One decode at a time, globally. Bulk analysis (the list view's magic wand
+// fans out a whole release at once) must never open 20 parallel fetches for
+// the same host the <audio> element is streaming from — playback would starve.
+// `urgent` (the track actually loaded in the player) jumps the queue.
+// ponytail: concurrency 1; raise it if bulk analysis feels too slow AND
+// playback still starts instantly.
+interface Job {
+  trackId: string;
+  streamUrl: string;
+}
+const queue: Job[] = [];
+const waiters = new Map<string, ((result: AudioAnalysis | null) => void)[]>();
+let pumping = false;
 
 let sharedContext: AudioContext | null = null;
 function getContext(): AudioContext {
@@ -116,29 +131,61 @@ export function getCachedAnalysis(trackId: string): AudioAnalysis | null {
   return cache.get(trackId) ?? null;
 }
 
-/** Fetches + decodes the track's audio once, computing both peaks and BPM. No-ops if already cached/in flight. */
-export function computeAnalysis(trackId: string, streamUrl: string, onReady: (result: AudioAnalysis) => void): void {
-  if (cache.has(trackId) || inFlight.has(trackId)) return;
-  inFlight.add(trackId);
+/** Fetch + decode one track, computing both peaks and BPM. */
+async function analyze(streamUrl: string): Promise<AudioAnalysis> {
+  // Low priority: this competes on the same host/connection as the <audio>
+  // element actually streaming the track — playback must win that race.
+  const res = await fetch(streamUrl, { priority: "low" } as RequestInit);
+  const arrayBuffer = await res.arrayBuffer();
+  const audioBuffer = await getContext().decodeAudioData(arrayBuffer);
+  const channel = audioBuffer.getChannelData(0);
+  return { peaks: downsample(channel), bpm: estimateBpm(channel, audioBuffer.sampleRate), duration: audioBuffer.duration };
+}
 
-  (async () => {
-    try {
-      // Low priority: this competes on the same host/connection as the <audio>
-      // element actually streaming the track — playback must win that race.
-      const res = await fetch(streamUrl, { priority: "low" } as RequestInit);
-      const arrayBuffer = await res.arrayBuffer();
-      const audioBuffer = await getContext().decodeAudioData(arrayBuffer);
-      const channel = audioBuffer.getChannelData(0);
-      const result: AudioAnalysis = {
-        peaks: downsample(channel),
-        bpm: estimateBpm(channel, audioBuffer.sampleRate),
-      };
-      cache.set(trackId, result);
-      onReady(result);
-    } catch {
-      // leave uncached — the scrobbler stays flat and the BPM column stays blank for this track
-    } finally {
-      inFlight.delete(trackId);
+async function pump(): Promise<void> {
+  if (pumping) return;
+  pumping = true;
+  while (queue.length) {
+    const job = queue.shift()!;
+    // A failed decode stays uncached and reports null — the scrobbler stays
+    // flat and the BPM column stays blank for that track.
+    const result = await analyze(job.streamUrl).catch(() => null);
+    if (result) cache.set(job.trackId, result);
+    const callbacks = waiters.get(job.trackId) ?? [];
+    waiters.delete(job.trackId);
+    for (const cb of callbacks) cb(result);
+  }
+  pumping = false;
+}
+
+/**
+ * Queues an analysis for `trackId`, calling back exactly once (with null if it
+ * failed). Cached results call back synchronously; a track already queued just
+ * adds another listener rather than fetching twice.
+ */
+export function computeAnalysis(
+  trackId: string,
+  streamUrl: string,
+  onDone: (result: AudioAnalysis | null) => void,
+  urgent = false
+): void {
+  const cached = cache.get(trackId);
+  if (cached) {
+    onDone(cached);
+    return;
+  }
+  const existing = waiters.get(trackId);
+  if (existing) {
+    existing.push(onDone);
+    if (urgent) {
+      const i = queue.findIndex((j) => j.trackId === trackId);
+      if (i > 0) queue.unshift(queue.splice(i, 1)[0]);
     }
-  })();
+    return;
+  }
+  waiters.set(trackId, [onDone]);
+  const job = { trackId, streamUrl };
+  if (urgent) queue.unshift(job);
+  else queue.push(job);
+  pump();
 }

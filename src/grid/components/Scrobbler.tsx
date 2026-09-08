@@ -40,14 +40,14 @@ export default function Scrobbler({ peaks, progress, hasRealProgress, disabled, 
               <div
                 key={i}
                 className="min-w-0 flex-1"
-                style={{ height: `${Math.max(h * 100, 8)}%`, background: barFraction <= displayProgress ? "#1da0c3" : "#3a3835" }}
+                style={{ height: `${Math.max(h * 100, 8)}%`, background: barFraction <= displayProgress ? "#1da0c3" : "#57534e" }}
               />
             );
           })}
         </div>
       ) : (
         <>
-          <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#3a3835]" />
+          <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 bg-[#57534e]" />
           <div
             className="absolute left-0 top-1/2 h-[2px] -translate-y-1/2 bg-accent"
             style={{ width: `${displayProgress * 100}%` }}
