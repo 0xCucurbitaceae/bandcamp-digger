@@ -177,37 +177,47 @@ async function sync() {
   let cards = await getCards();
   const existingByUrl = new Map(cards.map((c) => [c.url, c]));
 
-  // Add skeletons for newly-found tabs; re-link dead cards whose URL matches a tab again.
-  for (const tab of tabs) {
-    if (!tab.url) continue;
-    const existing = existingByUrl.get(tab.url);
-    if (!existing) {
-      const fresh: CardRecord = {
-        id: tab.url,
-        url: tab.url,
-        tabId: tab.id ?? null,
-        title: tab.title ?? null,
-        favIconUrl: tab.favIconUrl ?? null,
-        artist: null,
-        album: null,
-        tracks: [],
-        selectedTrackId: null,
-        track: null,
-        trackId: null,
-        streamUrl: null,
-        artUrl: null,
-        status: "pending",
-        permanentFailure: false,
-        attempts: 0,
-        refreshedAt: null,
-        order: cards.length,
-        archived: false,
-      };
-      cards.push(fresh);
-      existingByUrl.set(tab.url, fresh);
-    } else if (existing.tabId !== tab.id) {
-      existing.tabId = tab.id ?? null; // re-link a dead card
-    }
+  // Re-link dead cards whose URL matches a live tab again.
+  for (const [url, tab] of tabsByUrl) {
+    const existing = existingByUrl.get(url);
+    if (existing && existing.tabId !== tab.id) existing.tabId = tab.id ?? null;
+  }
+
+  // Add skeletons for newly-found tabs, most recently opened first, so the
+  // freshest release lands at the top of the grid/list. `lastAccessed`
+  // (Chrome 121+) stands in for the tab's open date; without it a tab counts
+  // as just-opened, which keeps discovery order for older Chrome.
+  const now = Date.now();
+  const openedAt = (t: chrome.tabs.Tab) => (t as { lastAccessed?: number }).lastAccessed ?? now;
+  const newTabs = [...tabsByUrl.values()]
+    .filter((t) => !existingByUrl.has(t.url as string))
+    .sort((a, b) => openedAt(b) - openedAt(a));
+  // Orders sit below every existing card's, so new arrivals stack on top
+  // without disturbing an order the user has dragged into place.
+  let nextOrder = Math.min(0, ...cards.map((c) => c.order)) - newTabs.length;
+  for (const tab of newTabs) {
+    const fresh: CardRecord = {
+      id: tab.url as string,
+      url: tab.url as string,
+      tabId: tab.id ?? null,
+      title: tab.title ?? null,
+      favIconUrl: tab.favIconUrl ?? null,
+      artist: null,
+      album: null,
+      tracks: [],
+      selectedTrackId: null,
+      track: null,
+      trackId: null,
+      streamUrl: null,
+      artUrl: null,
+      status: "pending",
+      permanentFailure: false,
+      attempts: 0,
+      refreshedAt: null,
+      order: nextOrder++,
+      archived: false,
+    };
+    cards.push(fresh);
   }
 
   // A card whose URL no longer has a live tab goes dead (tabId: null); never removed here.
