@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getPlaybackMode, setPlaybackMode } from "../lib/storage";
+import { clearNowPlaying, setNowPlaying } from "../lib/nowPlaying";
+import type { PlayerCommand } from "../lib/nowPlaying";
 import type { CardRecord, PlaybackMode } from "../lib/types";
 import { computeAnalysis, getCachedAnalysis } from "../lib/waveform";
 
@@ -266,6 +268,78 @@ export function usePlayer({ cards, ordered, persistCard, refreshTrack, onToast }
   const scrollToPlaying = useCallback(() => {
     document.querySelector('[data-playing="true"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
+
+  // --- toolbar popup mirror -------------------------------------------------
+  // The popup has no audio of its own: this surface publishes what's loaded and
+  // obeys the transport commands the popup sends back. `surfaceId` scopes those
+  // commands to the one page that actually owns playback — a tab grid and a
+  // collection page can both be open with a track loaded.
+  const surfaceId = useRef(Math.random().toString(36).slice(2)).current;
+
+  const currentTrackId = current?.selectedTrackId ?? null;
+  const currentPeaks = currentTrackId ? waveforms[currentTrackId] ?? null : null;
+  const currentBpm = currentTrackId ? bpms[currentTrackId] ?? null : null;
+
+  useEffect(() => {
+    if (!current) return;
+    setNowPlaying({
+      surfaceId,
+      pageUrl: location.href,
+      releaseUrl: current.url,
+      track: current.track,
+      artist: current.artist,
+      album: current.album,
+      artUrl: current.artUrl,
+      isPlaying,
+      dur,
+      peaks: currentPeaks,
+      bpm: currentBpm,
+    });
+  }, [
+    surfaceId,
+    current?.id,
+    current?.track,
+    current?.artist,
+    current?.album,
+    current?.artUrl,
+    current?.url,
+    isPlaying,
+    dur,
+    currentPeaks,
+    currentBpm,
+  ]);
+
+  useEffect(() => {
+    const onUnload = () => clearNowPlaying(surfaceId);
+    window.addEventListener("pagehide", onUnload);
+    const listener = (msg: any, _sender: unknown, sendResponse: (r: unknown) => void) => {
+      if (msg?.surfaceId !== surfaceId) return;
+      // The popup polls for the playhead rather than us broadcasting it — see
+      // fetchPosition in nowPlaying.ts. Read straight off the element so the
+      // answer doesn't lag a `pos` state update.
+      if (msg.type === "playerPosition") {
+        sendResponse({ pos: audioRef.current?.currentTime ?? 0 });
+        return;
+      }
+      if (msg.type !== "playerCommand") return;
+      const action = msg.action as PlayerCommand;
+      if (action === "toggle") setIsPlaying(!isPlaying);
+      else if (action === "seek") seek(msg.fraction);
+      else step(action === "next" ? 1 : -1);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => {
+      window.removeEventListener("pagehide", onUnload);
+      chrome.runtime.onMessage.removeListener(listener);
+    };
+  }, [surfaceId, isPlaying, step, seek]);
+
+  // Page title follows the loaded track, so the merged page is identifiable
+  // from the tab strip alone while it plays.
+  const baseTitle = useRef(document.title).current;
+  useEffect(() => {
+    document.title = current?.track ? `${current.artist ?? ""} — ${current.track}` : baseTitle;
+  }, [baseTitle, current?.track, current?.artist]);
 
   return {
     playbackMode,

@@ -8,9 +8,11 @@ interface Props {
   hasRealProgress: boolean;
   disabled: boolean;
   onScrub: (fraction: number) => void;
+  /** size/shape override — the list view's inline strip by default, wider in the popup */
+  className?: string;
 }
 
-export default function Scrobbler({ peaks, progress, hasRealProgress, disabled, onScrub }: Props) {
+export default function Scrobbler({ peaks, progress, hasRealProgress, disabled, onScrub, className = "h-[18px] w-[72px]" }: Props) {
   // Give instant visual feedback on click — real `progress` lags behind until
   // playback actually loads/seeks, so track the clicked spot locally until it does.
   const [optimistic, setOptimistic] = useState<number | null>(null);
@@ -29,7 +31,7 @@ export default function Scrobbler({ peaks, progress, hasRealProgress, disabled, 
         onScrub(fraction);
       }}
       title="Click to play from here"
-      className="relative h-[18px] w-[72px]"
+      className={`relative ${className}`}
       style={{ cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.3 : 1 }}
     >
       {peaks ? (

@@ -21,7 +21,8 @@ interface Props {
   onScrollToPlaying: () => void;
 }
 
-function fmt(s: number): string {
+/** m:ss for the transport clocks — shared with the toolbar popup's mini player. */
+export function fmt(s: number): string {
   if (!isFinite(s) || s < 0) s = 0;
   const m = Math.floor(s / 60);
   const r = Math.floor(s % 60);

@@ -14,6 +14,40 @@ const MAX_ATTEMPTS = 3;
 
 chrome.action.onClicked.addListener(() => openGrid());
 
+// --- toolbar button ----------------------------------------------------------
+// Two behaviours off one button: with no merger page open the click opens one
+// (onClicked only fires while the popup is unset); with one open the click
+// drops the mini player popup instead. Chrome has no conditional-popup API, so
+// the popup is set/unset as merger tabs come and go.
+const POPUP_PAGE = "src/popup/index.html";
+const mergerPageUrls = () => [
+  chrome.runtime.getURL("src/grid/index.html"),
+  chrome.runtime.getURL("src/label/index.html") + "*",
+];
+
+async function syncActionPopup() {
+  const open = await chrome.tabs.query({ url: mergerPageUrls() });
+  await chrome.action.setPopup({ popup: open.length ? POPUP_PAGE : "" });
+}
+
+chrome.tabs.onCreated.addListener(syncActionPopup);
+chrome.tabs.onRemoved.addListener(syncActionPopup);
+chrome.tabs.onUpdated.addListener(syncActionPopup);
+chrome.runtime.onStartup.addListener(syncActionPopup);
+syncActionPopup(); // also covers the worker being woken from scratch
+
+/** Focuses an already-open tab for `url`, opening one if there is none — the
+ *  popup's "open tab" (the release) and "open page" (the merger surface). */
+async function focusTab(url: string) {
+  const [existing] = await chrome.tabs.query({ url });
+  if (existing?.id) {
+    await chrome.windows.update(existing.windowId, { focused: true });
+    await chrome.tabs.update(existing.id, { active: true });
+  } else {
+    await chrome.tabs.create({ url });
+  }
+}
+
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("src/welcome/index.html") });
 });
@@ -397,6 +431,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (disco) openCollection("label", disco.id, disco.url, disco.name, disco.items).then(() => sendResponse({ ok: true }));
       else sendResponse({ ok: false });
     });
+    return true;
+  }
+  if (msg?.type === "focusTab" && typeof msg.url === "string") {
+    focusTab(msg.url).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (msg?.type === "refreshTrack" && msg.cardId) {
