@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCards, setCards, getUiConfig, setUiConfig, onStorageChange } from "../../lib/storage";
+import { getCards, updateCards, getUiConfig, setUiConfig, onStorageChange } from "../../lib/storage";
 import type { CardRecord, ListColumnId, UiConfig, ViewMode } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
 import { usePlayer } from "../../hooks/usePlayer";
@@ -61,12 +61,13 @@ export function useGrid() {
   const ordered = useMemo(() => allSorted.filter((c) => !c.archived), [allSorted]);
   const archivedCards = useMemo(() => allSorted.filter((c) => c.archived), [allSorted]);
 
+  // Every write here goes through `updateCards`, which re-reads storage inside
+  // a serialized chain. Writing this page's whole array back instead would
+  // revert every card the background extracted since the last storage event.
+  // Local state is still set optimistically so the UI doesn't wait on a round trip.
   const persistCard = useCallback((updated: CardRecord) => {
-    setCardsState((prev) => {
-      const next = prev.map((c) => (c.id === updated.id ? updated : c));
-      setCards(next);
-      return next;
-    });
+    setCardsState((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    updateCards((cards) => cards.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)));
   }, []);
 
   const player = usePlayer({
@@ -88,21 +89,29 @@ export function useGrid() {
     }
   }, [syncing]);
 
-  // Kick a sync on first open so a fresh grid page always tries to pick up open tabs.
+  // Kick a sync on first open so a fresh grid page always tries to pick up open
+  // tabs, then keep kicking. The extraction queue lives entirely in the service
+  // worker's memory and staggers out over minutes on a big tab set, so a worker
+  // torn down partway through takes the rest of the backlog with it — cards
+  // just stay "pending" with nothing left to retry them. A fresh worker only
+  // picks the leftovers up when something asks it to, so the page asks every
+  // 60s (same resume the collection page already does). `auto` tells the
+  // background this is the heartbeat, not the user: it skips cards that have
+  // already burned MAX_ATTEMPTS, which pressing Sync still retries.
   useEffect(() => {
     requestSync();
+    const timer = setInterval(() => chrome.runtime.sendMessage({ type: "sync", auto: true }), 60_000);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** Reorders the visible (non-archived) list; archived cards keep their existing order untouched. */
   const persistOrder = useCallback((newVisible: CardRecord[]) => {
-    setCardsState((prev) => {
-      const archivedOnly = prev.filter((c) => c.archived);
-      const withOrder = newVisible.map((c, i) => ({ ...c, order: i }));
-      const merged = [...withOrder, ...archivedOnly];
-      setCards(merged);
-      return merged;
-    });
+    const orderById = new Map(newVisible.map((c, i) => [c.id, i]));
+    const reorder = (cards: CardRecord[]) =>
+      cards.map((c) => (orderById.has(c.id) ? { ...c, order: orderById.get(c.id) as number } : c));
+    setCardsState(reorder);
+    updateCards(reorder);
   }, []);
 
   const toggleExpand = useCallback((id: string) => {
@@ -164,21 +173,17 @@ export function useGrid() {
     } catch {
       // already gone
     }
-    setCardsState((prev) => {
-      const next = prev.map((c) => (c.id === card.id ? { ...c, tabId: null } : c));
-      setCards(next);
-      return next;
-    });
+    const kill = (cards: CardRecord[]) => cards.map((c) => (c.id === card.id ? { ...c, tabId: null } : c));
+    setCardsState(kill);
+    updateCards(kill);
   }, []);
 
   /** "Clean" — moves every dead (closed-tab) card into the Archive, doesn't delete anything. */
   const archiveDead = useCallback(() => {
     const isDead = (c: CardRecord) => c.status !== "pending" && c.tabId === null && !c.archived;
-    setCardsState((prev) => {
-      const next = prev.map((c) => (isDead(c) ? { ...c, archived: true } : c));
-      setCards(next);
-      return next;
-    });
+    const archive = (cards: CardRecord[]) => cards.map((c) => (isDead(c) ? { ...c, archived: true } : c));
+    setCardsState(archive);
+    updateCards(archive);
     if (playingId && cards.some((c) => c.id === playingId && isDead(c))) {
       setPlayingId(null);
       setIsPlaying(false);
@@ -199,11 +204,9 @@ export function useGrid() {
 
   /** Permanently deletes an archived card — the only true delete left in the app. */
   const removeArchived = useCallback((id: string) => {
-    setCardsState((prev) => {
-      const next = prev.filter((c) => c.id !== id);
-      setCards(next);
-      return next;
-    });
+    const drop = (cards: CardRecord[]) => cards.filter((c) => c.id !== id);
+    setCardsState(drop);
+    updateCards(drop);
   }, []);
 
   return {

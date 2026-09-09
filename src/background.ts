@@ -2,7 +2,7 @@ import { parseTralbum, fetchExtract, decodeEntities, BROWSER_HEADERS } from "./l
 import type { TralbumData } from "./lib/bandcamp";
 import { parseDiscographyHtml } from "./lib/discography";
 import type { DiscographyItem } from "./lib/discography";
-import { getCards, setCards, getCollection, setCollection } from "./lib/storage";
+import { getCards, setCards, getCollection, setCollection, updateCards, updateCollection } from "./lib/storage";
 import type { CollectionKind } from "./lib/storage";
 import type { CardRecord } from "./lib/types";
 
@@ -23,6 +23,11 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
 // their own 2s would halve the real interval and push us into the error rate
 // BANDCAMP.md measured at 1.2s.
 let fetchChain: Promise<unknown> = Promise.resolve();
+
+// Cards an earlier sync is still extracting. The grid page re-kicks sync every
+// 60s to restart a queue a torn-down service worker took with it; without this
+// a kick landing mid-backlog would queue the whole remainder a second time.
+const inFlightCards = new Set<string>();
 
 function enqueueFetch<T>(job: () => Promise<T>): Promise<T> {
   const run = fetchChain.then(job, job);
@@ -163,67 +168,72 @@ async function refreshTrack(cardId: string, collectionKind?: CollectionKind, col
     await applyCollectionCard(collectionKind, collectionId, merged);
     return;
   }
-  const latest = await getCards();
-  const idx = latest.findIndex((c) => c.id === cardId);
-  if (idx === -1) return;
-  latest[idx] = { ...latest[idx], ...merged };
-  await setCards(latest);
+  await updateCards((latest) => latest.map((c) => (c.id === cardId ? { ...c, ...merged } : c)));
 }
 
-async function sync() {
+/**
+ * `auto` marks the grid page's 60s resume kick rather than a user pressing
+ * Sync. Only automatic kicks respect MAX_ATTEMPTS — a release on a domain we
+ * hold no host permission for can never succeed, and the resume would retry it
+ * every minute forever. Pressing Sync still retries it, so a card that failed
+ * for a since-fixed reason isn't stuck for good.
+ */
+async function sync(auto = false) {
   const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
   const tabsByUrl = new Map(tabs.filter((t) => t.url).map((t) => [t.url as string, t]));
 
-  let cards = await getCards();
-  const existingByUrl = new Map(cards.map((c) => [c.url, c]));
+  // Skeletons + tab re-linking, applied to the freshest stored list: a
+  // previous sync's fetch queue is still writing extracted cards in while
+  // this runs, and a plain read-then-write here would undo them.
+  const cards = await updateCards((stored) => {
+    const existingByUrl = new Map(stored.map((c) => [c.url, c]));
 
-  // Re-link dead cards whose URL matches a live tab again.
-  for (const [url, tab] of tabsByUrl) {
-    const existing = existingByUrl.get(url);
-    if (existing && existing.tabId !== tab.id) existing.tabId = tab.id ?? null;
-  }
+    // Re-link dead cards whose URL matches a live tab again.
+    for (const [url, tab] of tabsByUrl) {
+      const existing = existingByUrl.get(url);
+      if (existing && existing.tabId !== tab.id) existing.tabId = tab.id ?? null;
+    }
 
-  // Add skeletons for newly-found tabs, most recently opened first, so the
-  // freshest release lands at the top of the grid/list. `lastAccessed`
-  // (Chrome 121+) stands in for the tab's open date; without it a tab counts
-  // as just-opened, which keeps discovery order for older Chrome.
-  const now = Date.now();
-  const openedAt = (t: chrome.tabs.Tab) => (t as { lastAccessed?: number }).lastAccessed ?? now;
-  const newTabs = [...tabsByUrl.values()]
-    .filter((t) => !existingByUrl.has(t.url as string))
-    .sort((a, b) => openedAt(b) - openedAt(a));
-  // Orders sit below every existing card's, so new arrivals stack on top
-  // without disturbing an order the user has dragged into place.
-  let nextOrder = Math.min(0, ...cards.map((c) => c.order)) - newTabs.length;
-  for (const tab of newTabs) {
-    const fresh: CardRecord = {
-      id: tab.url as string,
-      url: tab.url as string,
-      tabId: tab.id ?? null,
-      title: tab.title ?? null,
-      favIconUrl: tab.favIconUrl ?? null,
-      artist: null,
-      album: null,
-      tracks: [],
-      selectedTrackId: null,
-      track: null,
-      trackId: null,
-      streamUrl: null,
-      artUrl: null,
-      status: "pending",
-      permanentFailure: false,
-      attempts: 0,
-      refreshedAt: null,
-      order: nextOrder++,
-      archived: false,
-    };
-    cards.push(fresh);
-  }
+    // Add skeletons for newly-found tabs, most recently opened first, so the
+    // freshest release lands at the top of the grid/list. `lastAccessed`
+    // (Chrome 121+) stands in for the tab's open date; without it a tab counts
+    // as just-opened, which keeps discovery order for older Chrome.
+    const now = Date.now();
+    const openedAt = (t: chrome.tabs.Tab) => (t as { lastAccessed?: number }).lastAccessed ?? now;
+    const newTabs = [...tabsByUrl.values()]
+      .filter((t) => !existingByUrl.has(t.url as string))
+      .sort((a, b) => openedAt(b) - openedAt(a));
+    // Orders sit below every existing card's, so new arrivals stack on top
+    // without disturbing an order the user has dragged into place.
+    let nextOrder = Math.min(0, ...stored.map((c) => c.order)) - newTabs.length;
+    for (const tab of newTabs) {
+      const fresh: CardRecord = {
+        id: tab.url as string,
+        url: tab.url as string,
+        tabId: tab.id ?? null,
+        title: tab.title ?? null,
+        favIconUrl: tab.favIconUrl ?? null,
+        artist: null,
+        album: null,
+        tracks: [],
+        selectedTrackId: null,
+        track: null,
+        trackId: null,
+        streamUrl: null,
+        artUrl: null,
+        status: "pending",
+        permanentFailure: false,
+        attempts: 0,
+        refreshedAt: null,
+        order: nextOrder++,
+        archived: false,
+      };
+      stored.push(fresh);
+    }
 
-  // A card whose URL no longer has a live tab goes dead (tabId: null); never removed here.
-  cards = cards.map((c) => (tabsByUrl.has(c.url) ? c : { ...c, tabId: null }));
-
-  await setCards(cards);
+    // A card whose URL no longer has a live tab goes dead (tabId: null); never removed here.
+    return stored.map((c) => (tabsByUrl.has(c.url) ? c : { ...c, tabId: null }));
+  });
 
   const domJobs: CardRecord[] = [];
   const fetchJobs: CardRecord[] = [];
@@ -236,27 +246,38 @@ async function sync() {
     const needsExtraction =
       c.status === "pending" || ((c.status === "ready" || c.status === "unplayable") && c.tracks.length === 0);
     if (!needsExtraction) continue;
+    if (inFlightCards.has(c.id)) continue;
+    if (auto && c.attempts >= MAX_ATTEMPTS) continue;
+    inFlightCards.add(c.id);
     const tab = c.tabId ? tabsByUrl.get(c.url) : undefined;
     if (tab?.status === "complete" && !tab.discarded) domJobs.push(c);
     else fetchJobs.push(c);
   }
 
   const applyUpdate = async (updated: CardRecord) => {
-    const latest = await getCards();
-    const idx = latest.findIndex((c) => c.id === updated.id);
-    if (idx === -1) return; // removed by the user mid-sync
-    latest[idx] = { ...latest[idx], ...updated };
-    await setCards(latest);
+    // Serialized: 100 tabs extract concurrently, and an unsynchronized
+    // read-modify-write means all but the last writer lose their update.
+    await updateCards((latest) =>
+      latest.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+    );
   };
 
   await Promise.all(
-    domJobs.map(async (c) => applyUpdate(await extractOne(c, tabsByUrl.get(c.url))))
+    domJobs.map(async (c) => {
+      try {
+        await applyUpdate(await extractOne(c, tabsByUrl.get(c.url)));
+      } finally {
+        inFlightCards.delete(c.id);
+      }
+    })
   );
 
   // Not awaited: a queue shared with a big label load can be minutes deep, and
   // the UI already updates live off storage — only the spinner would be waiting.
   for (const c of fetchJobs) {
-    enqueueFetch(() => extractOne(c, tabsByUrl.get(c.url))).then(applyUpdate);
+    enqueueFetch(() => extractOne(c, tabsByUrl.get(c.url)))
+      .then(applyUpdate)
+      .finally(() => inFlightCards.delete(c.id));
   }
 }
 
@@ -268,12 +289,10 @@ async function sync() {
 /** Rewrites one card inside a collection, re-reading first so concurrent
  *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
 async function applyCollectionCard(kind: CollectionKind, id: string, updated: CardRecord) {
-  const col = await getCollection(kind, id);
-  if (!col) return;
-  const idx = col.cards.findIndex((c) => c.id === updated.id);
-  if (idx === -1) return;
-  col.cards[idx] = { ...col.cards[idx], ...updated };
-  await setCollection(kind, col);
+  await updateCollection(kind, id, (col) => ({
+    ...col,
+    cards: col.cards.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)),
+  }));
 }
 
 function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
@@ -382,7 +401,7 @@ async function loadCollection(kind: CollectionKind, id: string) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "sync") {
-    sync().then(() => sendResponse({ ok: true }));
+    sync(msg.auto === true).then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
   }
   if (msg?.type === "loadCollection" && typeof msg.id === "string") {
