@@ -3,6 +3,7 @@ import { getCards, setCards, getUiConfig, setUiConfig, onStorageChange } from ".
 import type { CardRecord, ListColumnId, UiConfig, ViewMode } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
 import { usePlayer } from "../../hooks/usePlayer";
+import { filterCards } from "../../lib/search";
 
 export type { ViewMode };
 
@@ -60,6 +61,11 @@ export function useGrid() {
   const allSorted = useMemo(() => cards.slice().sort((a, b) => a.order - b.order), [cards]);
   const ordered = useMemo(() => allSorted.filter((c) => !c.archived), [allSorted]);
   const archivedCards = useMemo(() => allSorted.filter((c) => c.archived), [allSorted]);
+  // Search filters what's shown and what prev/next walks — but never `ordered`,
+  // which is what drag-reorder persists (reordering a filtered list would drop
+  // the hidden cards out of storage).
+  const [query, setQuery] = useState("");
+  const visible = useMemo(() => filterCards(ordered, query), [ordered, query]);
 
   const persistCard = useCallback((updated: CardRecord) => {
     setCardsState((prev) => {
@@ -71,7 +77,7 @@ export function useGrid() {
 
   const player = usePlayer({
     cards,
-    ordered,
+    ordered: visible,
     persistCard,
     refreshTrack: (cardId) => chrome.runtime.sendMessage({ type: "refreshTrack", cardId }),
     onToast: toast,
@@ -208,7 +214,9 @@ export function useGrid() {
 
   return {
     ...player,
-    cards: ordered,
+    cards: visible,
+    query,
+    setQuery,
     archivedCards,
     archiveOpen: uiConfig.archiveOpen,
     toggleArchiveOpen,

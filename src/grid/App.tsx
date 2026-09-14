@@ -4,6 +4,7 @@ import Archive from "./components/Archive";
 import GridView from "./components/GridView";
 import ListView from "./components/ListView";
 import PlayerBar from "./components/PlayerBar";
+import SearchBox from "./components/SearchBox";
 import SettingsDrawer from "./components/SettingsDrawer";
 import Toast from "./components/Toast";
 
@@ -22,6 +23,7 @@ export default function App() {
         <div className="text-xs text-subtext">
           {liveCount} tabs{deadCount ? ` · ${deadCount} closed` : ""}
         </div>
+        <SearchBox value={g.query} onChange={g.setQuery} />
         <div className="flex-1" />
 
         <div
@@ -83,7 +85,7 @@ export default function App() {
 
       {g.cards.length === 0 ? (
         <div className="px-11 py-16 text-sm text-subtext">
-          No Bandcamp tabs found yet. Open some releases, then hit Sync.
+          {g.query ? "Nothing matches that search." : "No Bandcamp tabs found yet. Open some releases, then hit Sync."}
         </div>
       ) : g.view === "list" ? (
         <ListView

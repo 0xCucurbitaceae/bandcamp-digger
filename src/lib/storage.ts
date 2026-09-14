@@ -76,7 +76,13 @@ export function onStorageChange(
 // never rewrites (or wakes listeners for) the tab-grid's `cards` key. Label and
 // wishlist collections are the exact same shape — just a different key prefix.
 
-export type CollectionKind = "label" | "wishlist";
+export type CollectionKind = "label" | "wishlist" | "collection";
+
+const COLLECTION_KINDS: CollectionKind[] = ["label", "wishlist", "collection"];
+
+/** Narrows a kind off a URL param or a message, defaulting to "label". */
+export const parseCollectionKind = (k: unknown): CollectionKind =>
+  COLLECTION_KINDS.includes(k as CollectionKind) ? (k as CollectionKind) : "label";
 
 const collectionKey = (kind: CollectionKind, id: string) => `${kind}:${id}`;
 
@@ -127,9 +133,9 @@ export async function listCollections(): Promise<CollectionSummary[]> {
     const sep = key.indexOf(":");
     if (sep === -1) continue;
     const kind = key.slice(0, sep);
-    if (kind !== "label" && kind !== "wishlist") continue;
+    if (!COLLECTION_KINDS.includes(kind as CollectionKind)) continue;
     const col = value as LabelCollection;
-    out.push({ kind, id: key.slice(sep + 1), name: col.name || col.id, count: col.cards?.length ?? 0 });
+    out.push({ kind: kind as CollectionKind, id: key.slice(sep + 1), name: col.name || col.id, count: col.cards?.length ?? 0 });
   }
   return out;
 }
@@ -143,7 +149,7 @@ export async function removeCollection(kind: CollectionKind, id: string): Promis
 export function onCollectionsListChange(cb: () => void) {
   const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
     if (area !== "local") return;
-    const touched = Object.keys(changes).some((k) => k.startsWith("label:") || k.startsWith("wishlist:"));
+    const touched = Object.keys(changes).some((k) => COLLECTION_KINDS.some((kind) => k.startsWith(`${kind}:`)));
     if (touched) cb();
   };
   chrome.storage.onChanged.addListener(listener);

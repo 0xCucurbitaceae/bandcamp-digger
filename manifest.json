@@ -41,5 +41,15 @@
       ],
       "run_at": "document_idle"
     }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/label/index.html"
+      ],
+      "matches": [
+        "*://*.bandcamp.com/*"
+      ]
+    }
   ]
 }

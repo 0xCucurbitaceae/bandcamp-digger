@@ -40,18 +40,25 @@
       <h2>How it works</h2>
       <ol>
         <li><strong>Open some releases</strong> Browse Bandcamp like you normally do and leave the albums you want to hear open in tabs.</li>
-        <li><strong>Click the extension icon</strong> It builds a merged page from every open Bandcamp tab. Pin it from the <kbd>puzzle-piece</kbd> menu so it's always one click away.</li>
+        <li><strong>Click the extension icon</strong> It builds a merged page from every open Bandcamp tab. Pin it from the <kbd>puzzle-piece</kbd> menu &mdash; once the page is open, that same icon becomes a mini player.</li>
         <li><strong>Press play</strong> One player runs straight through the whole queue. Come back any time, the page keeps itself in sync with your tabs.</li>
       </ol>
       <img class="shot" src="/welcome/grid.webp" alt="The merged grid: album covers from ten open tabs with a shared player at the bottom" />
 
       <h2>What it can do</h2>
       <div class="features">
-        <div class="feature"><strong>Grid or list</strong><p>Browse covers, or switch to a dense list with resizable, reorderable columns and a lazily computed BPM per track.</p></div>
-        <div class="feature"><strong>One queue</strong><p>Play one track per release or full albums. Drag cards to reorder, expand any release to jump to a specific track.</p></div>
+        <div class="feature"><strong>Grid or list</strong><p>Browse covers, or switch to a dense list with resizable, reorderable columns &mdash; title, artist, album, time and BPM. Drag cards to reorder the queue.</p></div>
+        <div class="feature"><strong>One queue</strong><p>Play one track per release or full albums, straight through every tab. Expand any release to jump to a specific track.</p></div>
+        <div class="feature"><strong>Waveforms and BPM</strong><p>Decoded from the actual stream, not guessed. Click anywhere on a waveform to play from that spot; the magic wand analyses a whole release on demand.</p></div>
+        <div class="feature"><strong>Mini player in the toolbar</strong><p>While the merged page is open, the extension icon opens a popup player &mdash; artwork, waveform scrubber, BPM and transport &mdash; without leaving whatever page you're on.</p></div>
         <div class="feature"><strong>Sleeping tabs still play</strong><p>Tabs your browser has put to sleep show up and stay playable. The extension never wakes a tab just to read it.</p></div>
-        <div class="feature"><strong>Tab-aware</strong><p>Jump to a release's tab, close it (it stays playable from cache), reopen it, or archive closed tabs out of the way.</p></div>
+        <div class="feature"><strong>Tab-aware</strong><p>Jump to a release's tab, close it (it stays playable from cache), or reopen one you closed.</p></div>
+        <div class="feature"><strong>Archive</strong><p>One click sweeps every closed-tab card into an archive drawer, out of the way but still there to reopen &mdash; or delete for good.</p></div>
         <div class="feature"><strong>Listen to a whole label</strong><p>On any artist or label page a <em>Listen to all</em> button appears above the release grid. It loads the entire catalogue into the same player.</p></div>
+        <div class="feature"><strong>Listen to your wishlist</strong><p>A <em>Listen to wishlist</em> button on your own fan page loads the whole thing &mdash; not just the first page Bandcamp renders.</p></div>
+        <div class="feature"><strong>Listen to this artist</strong><p>From any row in the list, load that artist's full catalogue without going to their page first.</p></div>
+        <div class="feature"><strong>Streams that don't go stale</strong><p>Bandcamp's signed stream links eventually expire. When one does mid-listen, it's refreshed and playback resumes &mdash; on the track you'd picked.</p></div>
+        <div class="feature"><strong>Gentle on Bandcamp</strong><p>Every request it makes goes through one global two-second stagger, and it analyses one track at a time, so nothing it does competes with the music you're playing.</p></div>
         <div class="feature"><strong>Nothing leaves your browser</strong><p>No account, no analytics, no server. It streams the same public files Bandcamp's own player uses.</p></div>
       </div>
       <img class="shot" src="/welcome/list.webp" alt="List view with expanded tracklists, waveforms and BPM" />

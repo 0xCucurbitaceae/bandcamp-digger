@@ -1,14 +1,15 @@
-// Injects a "Listen to all"/"Listen to wishlist" button above a Bandcamp
-// release grid or a fan's wishlist. Reading the releases here rather than in
-// the background is the whole point: the content script sees the real,
-// rendered page (and, for a wishlist, can call Bandcamp's own paginated API
+// Injects a "Listen to all"/"Play wishlist"/"Play collection" button above a
+// Bandcamp release grid or on a fan's page. Reading the releases here rather
+// than in the background is the whole point: the content script sees the real,
+// rendered page (and, for a fan list, can call Bandcamp's own paginated API
 // with the page's own session cookie), so there's no stripped-page trap.
 
 import { readDiscography } from "../lib/discography";
-import { readFullWishlist } from "../lib/wishlist";
+import { readFanList, readFanPageData, type FanListKind } from "../lib/fanList";
+import type { CollectionKind } from "../lib/storage";
 
 const GRID_BUTTON_ID = "btm-listen-to-all";
-const WISHLIST_BUTTON_ID = "btm-listen-to-wishlist";
+const fanButtonId = (kind: FanListKind) => `btm-listen-to-${kind}`;
 
 function styleButton(btn: HTMLButtonElement) {
   Object.assign(btn.style, {
@@ -26,6 +27,84 @@ function styleButton(btn: HTMLButtonElement) {
     borderRadius: "4px",
     cursor: "pointer",
   } satisfies Partial<CSSStyleDeclaration>);
+}
+
+const OVERLAY_ID = "btm-overlay";
+
+/** Bandcamp's page body — everything between the site header and footer, on
+ *  both band pages and fan pages (verified live). Our frame takes its place. */
+const pageBody = () => document.getElementById("pgBd");
+
+function fitOverlay(frame: HTMLIFrameElement) {
+  frame.style.height = `${Math.max(400, window.innerHeight - frame.getBoundingClientRect().top - 16)}px`;
+}
+
+/**
+ * Swaps Bandcamp's page body for our list, in the same tab, leaving the site's
+ * own header (and anything below the body) in place. Kept in the DOM (only
+ * hidden) once dismissed — a removed frame stops its audio, a display:none one
+ * keeps playing, so going back to browsing Bandcamp doesn't cut the music off.
+ */
+function showOverlay(kind: CollectionKind, id: string) {
+  const body = pageBody();
+  const src = chrome.runtime.getURL(
+    `src/label/index.html?id=${encodeURIComponent(id)}&kind=${kind}&embed=1`
+  );
+
+  let frame = document.getElementById(OVERLAY_ID) as HTMLIFrameElement | null;
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.id = OVERLAY_ID;
+    // No #pgBd (a page shape we haven't seen): fall back to covering the tab
+    // rather than doing nothing.
+    Object.assign(
+      frame.style,
+      body
+        ? ({ display: "block", width: "100%", border: "none" } satisfies Partial<CSSStyleDeclaration>)
+        : ({
+            position: "fixed",
+            inset: "0",
+            width: "100%",
+            height: "100%",
+            border: "none",
+            zIndex: "2147483647",
+          } satisfies Partial<CSSStyleDeclaration>)
+    );
+
+    // The framed page is a different origin, so it can't hide itself — it asks.
+    // Matching on `source` rather than origin: only that exact frame is obeyed.
+    const self = frame;
+    window.addEventListener("message", (e) => {
+      if (e.source === self.contentWindow && (e.data as { type?: string } | null)?.type === "btmClose")
+        hideOverlay();
+    });
+    window.addEventListener("resize", () => {
+      if (self.style.position !== "fixed" && self.style.display !== "none") fitOverlay(self);
+    });
+
+    if (body) body.parentElement?.insertBefore(frame, body);
+    else document.documentElement.appendChild(frame);
+  }
+
+  // Switching between a fan's collection and wishlist reuses the same frame.
+  if (frame.src !== src) frame.src = src;
+  frame.style.display = "block";
+
+  if (body) {
+    body.style.display = "none";
+    window.scrollTo(0, 0);
+    fitOverlay(frame);
+  } else {
+    document.documentElement.style.overflow = "hidden";
+  }
+}
+
+function hideOverlay() {
+  const frame = document.getElementById(OVERLAY_ID);
+  if (frame) (frame as HTMLElement).style.display = "none";
+  const body = pageBody();
+  if (body) body.style.display = "";
+  document.documentElement.style.overflow = "";
 }
 
 function mountDiscography() {
@@ -54,7 +133,9 @@ function mountDiscography() {
         url: location.origin,
         name: disco.bandName || location.host,
         items: disco.items,
+        inline: true,
       });
+      showOverlay("label", location.host);
     } catch {
       // Extension reloaded out from under the page — a refresh re-injects this.
       btn.textContent = "Couldn't open — reload the page";
@@ -68,73 +149,74 @@ function mountDiscography() {
 }
 
 /**
- * A fan page is a Vue SPA — switching from "collection" to "wishlist" doesn't
- * reload the page, and the wishlist tab's own grid only renders once you're
+ * A fan page is a Vue SPA — switching between the "collection" and "wishlist"
+ * tabs doesn't reload the page, and each tab's grid only renders once you're
  * actually looking at it, which made waiting for `#wishlist-items` fragile
  * (it depends on catching the right DOM mutation at the right time).
  *
- * Sidesteps that entirely: `#pagedata`'s `wishlist_data` is present at load
- * regardless of which tab is active (verified live — item_count was there
- * even with `active_tab: "collection"`), and `.fan-bio-inner` (the header,
- * name/follow/stats) is present from the first render, tab-independent. So
- * this reads the count from the blob and plants the button in the header
- * once, instead of chasing the wishlist grid's own mount.
+ * Sidesteps that entirely: `#pagedata` carries both lists' item counts at load
+ * regardless of which tab is active, and `.fan-bio-inner` (the header,
+ * name/follow/stats) is present from the first render, tab-independent. So this
+ * reads the counts from the blob and plants a button per non-empty list in the
+ * header once, instead of chasing either grid's own mount.
  */
-function mountWishlist() {
-  if (document.getElementById(WISHLIST_BUTTON_ID)) return;
-
+function mountFanLists() {
   const header = document.querySelector(".fan-bio-inner");
   if (!header) return;
 
-  const raw = document.getElementById("pagedata")?.getAttribute("data-blob");
-  if (!raw) return;
-  let itemCount: number | undefined;
-  try {
-    itemCount = JSON.parse(raw).wishlist_data?.item_count;
-  } catch {
-    return;
-  }
-  if (!itemCount) return;
+  const page = readFanPageData(document);
+  if (!page) return;
 
-  const btn = document.createElement("button");
-  btn.id = WISHLIST_BUTTON_ID;
-  btn.type = "button";
-  btn.textContent = "▶  Listen to wishlist";
-  styleButton(btn);
-  btn.style.marginTop = "14px"; // sits after the bio/follow content, not flush against it
+  for (const kind of ["collection", "wishlist"] as const) {
+    if (document.getElementById(fanButtonId(kind)) || !page.counts[kind]) continue;
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "Reading wishlist…";
-    const wishlist = await readFullWishlist(document).catch(() => null);
-    if (!wishlist || wishlist.items.length === 0) {
-      btn.textContent = "Couldn't read the wishlist";
+    const label = `▶  Play ${kind} (${page.counts[kind]})`;
+    const btn = document.createElement("button");
+    btn.id = fanButtonId(kind);
+    btn.type = "button";
+    btn.textContent = label;
+    styleButton(btn);
+    btn.style.marginTop = "14px"; // sits after the bio/follow content, not flush against it
+    btn.style.marginRight = "8px";
+
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = `Reading ${kind}…`;
+      const list = await readFanList(document, kind).catch(() => null);
+      if (!list || list.items.length === 0) {
+        btn.textContent = `Couldn't read the ${kind}`;
+        btn.disabled = false;
+        return;
+      }
+      btn.textContent = "Opening…";
+      const id = location.pathname.split("/")[1] || list.fanName;
+      const owner = list.fanName ? `${list.fanName}'s` : "";
+      try {
+        await chrome.runtime.sendMessage({
+          type: "openFanList",
+          kind,
+          id,
+          url: location.href,
+          name: `${owner} ${kind}`.trim(),
+          items: list.items,
+          inline: true,
+        });
+        showOverlay(kind, id);
+      } catch {
+        btn.textContent = "Couldn't open — reload the page";
+        return;
+      }
       btn.disabled = false;
-      return;
-    }
-    btn.textContent = "Opening…";
-    try {
-      await chrome.runtime.sendMessage({
-        type: "openWishlist",
-        id: location.pathname.split("/")[1] || wishlist.fanName,
-        url: location.href,
-        name: wishlist.fanName ? `${wishlist.fanName}'s wishlist` : "Wishlist",
-        items: wishlist.items,
-      });
-    } catch {
-      btn.textContent = "Couldn't open — reload the page";
-      return;
-    }
-    btn.disabled = false;
-    btn.textContent = "▶  Listen to wishlist";
-  });
+      btn.textContent = label;
+    });
 
-  header.appendChild(btn);
+    header.appendChild(btn);
+  }
 }
 
 function mountAll() {
   mountDiscography();
-  mountWishlist();
+  mountFanLists();
 }
 
 mountAll();

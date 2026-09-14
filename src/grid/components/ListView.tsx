@@ -194,7 +194,7 @@ export default function ListView({
   };
 
   return (
-    <div className="flex flex-col px-11 pb-11 pt-[22px]">
+    <div className="mx-auto flex w-full max-w-7xl flex-col px-11 pb-11 pt-[22px]">
       <div className="flex items-center gap-4 border-b border-border pb-[9px] text-[11px] uppercase tracking-wider text-subtext">
         <div className="w-[230px] flex-none" />
         <div className="w-[26px] flex-none" />

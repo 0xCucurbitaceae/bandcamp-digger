@@ -4,6 +4,7 @@ import { parseDiscographyHtml } from "./lib/discography";
 import type { DiscographyItem } from "./lib/discography";
 import { getCards, setCards, getCollection, setCollection } from "./lib/storage";
 import type { CollectionKind } from "./lib/storage";
+import { parseCollectionKind } from "./lib/storage";
 import type { CardRecord } from "./lib/types";
 
 const BANDCAMP_MATCH = "*://*.bandcamp.com/*";
@@ -284,10 +285,10 @@ async function sync() {
   }
 }
 
-// --- label catalogues & wishlists --------------------------------------------
-// Both are just a named batch of releases (label discography, fan wishlist) —
-// same CardRecord shape, same one-page-per-collection storage. See
-// storage.ts's CollectionKind for the two supported kinds.
+// --- label catalogues & fan lists --------------------------------------------
+// All are just a named batch of releases (label discography, fan wishlist, fan
+// collection) — same CardRecord shape, same one-page-per-collection storage.
+// See storage.ts's CollectionKind for the supported kinds.
 
 /** Rewrites one card inside a collection, re-reading first so concurrent
  *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
@@ -331,7 +332,7 @@ function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
  * while keeping every tracklist already fetched — reloading those would cost
  * another full walk.
  */
-async function openCollection(kind: CollectionKind, id: string, url: string, name: string, items: DiscographyItem[]) {
+async function openCollection(kind: CollectionKind, id: string, url: string, name: string, items: DiscographyItem[], focus = true) {
   const existing = await getCollection(kind, id);
   const byUrl = new Map((existing?.cards ?? []).map((c) => [c.url, c]));
   const cards = items.map((item, i) => {
@@ -340,6 +341,9 @@ async function openCollection(kind: CollectionKind, id: string, url: string, nam
   });
 
   await setCollection(kind, { id, url, name, cards });
+  // focus=false: the caller is a collection page that will swap to this
+  // collection in place, so it only needs the storage write, not a second tab.
+  if (!focus) return;
   const pageUrl = chrome.runtime.getURL(
     `src/label/index.html?id=${encodeURIComponent(id)}&kind=${kind}`
   );
@@ -412,23 +416,34 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "loadCollection" && typeof msg.id === "string") {
     // Fire-and-forget: this can run for minutes on a big catalogue/wishlist,
     // and the page follows along through storage changes.
-    loadCollection(msg.kind === "wishlist" ? "wishlist" : "label", msg.id);
+    loadCollection(parseCollectionKind(msg.kind), msg.id);
     sendResponse({ ok: true });
     return false;
   }
+  // `inline`: the caller is a Bandcamp page that will show the collection in an
+  // overlay frame of its own, so it only wants the storage write, not a tab.
   if (msg?.type === "openLabel") {
-    openCollection("label", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+    openCollection("label", msg.id, msg.url, msg.name, msg.items, !msg.inline).then(() => sendResponse({ ok: true }));
     return true;
   }
-  if (msg?.type === "openWishlist") {
-    openCollection("wishlist", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+  // A fan's wishlist or collection — same shape as a label catalogue, just a
+  // different store (see storage.ts's CollectionKind).
+  if (msg?.type === "openFanList") {
+    openCollection(parseCollectionKind(msg.kind), msg.id, msg.url, msg.name, msg.items, !msg.inline).then(() =>
+      sendResponse({ ok: true })
+    );
     return true;
   }
   if (msg?.type === "openLabelFromRelease" && typeof msg.url === "string") {
     // Triggered from a single release row (list view) rather than the artist's
     // own page — fetches that artist's catalogue in the background first.
+    // `inline`: the caller swaps its own view onto the collection instead of
+    // getting a new tab, so it needs the id back.
     fetchDiscographyFor(msg.url).then((disco) => {
-      if (disco) openCollection("label", disco.id, disco.url, disco.name, disco.items).then(() => sendResponse({ ok: true }));
+      if (disco)
+        openCollection("label", disco.id, disco.url, disco.name, disco.items, !msg.inline).then(() =>
+          sendResponse({ ok: true, id: disco.id, name: disco.name })
+        );
       else sendResponse({ ok: false });
     });
     return true;

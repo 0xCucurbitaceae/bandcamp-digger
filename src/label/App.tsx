@@ -1,7 +1,8 @@
-import { Coffee, ExternalLink, Zap } from "lucide-react";
+import { ChevronLeft, Coffee, ExternalLink, X, Zap } from "lucide-react";
 import ListView from "../grid/components/ListView";
 import Toast from "../grid/components/Toast";
 import PlayerBar from "../grid/components/PlayerBar";
+import SearchBox from "../grid/components/SearchBox";
 import { useLabel } from "./hooks/useLabel";
 
 export default function App() {
@@ -12,9 +13,24 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-bg pb-[92px] font-sans text-text">
-      <div className="flex items-baseline gap-[18px] px-11 pb-5 pt-11">
-        <div className="text-[15px] font-semibold tracking-wide">{l.collection?.name || l.labelId}</div>
+      <div className={`flex items-baseline gap-[18px] px-11 ${l.embed ? "pb-3 pt-4" : "pb-5 pt-11"}`}>
+        {l.parentName && (
+          <div
+            onClick={l.back}
+            title={`Back to ${l.parentName}`}
+            className="flex cursor-pointer select-none items-center gap-[3px] self-center text-xs text-subtext hover:text-text"
+          >
+            <ChevronLeft size={14} />
+            <span>{l.parentName}</span>
+          </div>
+        )}
+        {/* In the overlay the Bandcamp page behind already names the collection —
+            only worth repeating once you've drilled into a different one. */}
+        {(!l.embed || l.parentName) && (
+          <div className="text-[15px] font-semibold tracking-wide">{l.collection?.name || l.labelId}</div>
+        )}
         <div className="text-xs text-subtext">{status}</div>
+        <SearchBox value={l.query} onChange={l.setQuery} />
         <div className="flex-1" />
 
         <div
@@ -28,24 +44,37 @@ export default function App() {
 
         <div className="h-3.5 w-px bg-border" />
 
-        <a
-          href={l.collection?.url}
-          target="_blank"
-          rel="noreferrer"
-          className="flex select-none items-baseline gap-[7px] text-xs text-subtext no-underline hover:text-text"
-        >
-          <ExternalLink size={12} />
-          <span>Bandcamp</span>
-        </a>
+        {l.embed ? (
+          <div
+            onClick={l.close}
+            title="Back to Bandcamp (Esc) — playback keeps going"
+            className="flex cursor-pointer select-none items-center gap-[6px] self-center text-xs text-subtext hover:text-text"
+          >
+            <X size={13} />
+            <span>Close</span>
+          </div>
+        ) : (
+          <a
+            href={l.collection?.url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex select-none items-baseline gap-[7px] text-xs text-subtext no-underline hover:text-text"
+          >
+            <ExternalLink size={12} />
+            <span>Bandcamp</span>
+          </a>
+        )}
       </div>
 
       <div className="mx-11 h-px bg-border" />
 
       {!l.loaded ? null : total === 0 ? (
         <div className="px-11 py-16 text-sm text-subtext">
-          {l.kind === "wishlist"
-            ? "Nothing here — open your Bandcamp wishlist and hit “Listen to wishlist”."
-            : "Nothing here — open a Bandcamp label or artist page and hit “Listen to all”."}
+          {l.query
+            ? "Nothing matches that search."
+            : l.kind === "label"
+              ? "Nothing here — open a Bandcamp label or artist page and hit “Listen to all”."
+              : `Nothing here — open your Bandcamp fan page and hit “Play ${l.kind}”.`}
         </div>
       ) : (
         <ListView
