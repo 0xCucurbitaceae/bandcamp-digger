@@ -20,6 +20,10 @@ export interface TralbumData {
   defaultTrack: TralbumTrack | null;
   tracks: TralbumTrack[];
   artUrl: string | null;
+  /** bandcamp's ids for the release itself — what its wishlist endpoint takes */
+  itemId: string | null;
+  itemType: "album" | "track" | null;
+  bandId: string | null;
 }
 
 interface RawTrackInfo {
@@ -30,9 +34,12 @@ interface RawTrackInfo {
 }
 
 interface RawTralbum {
+  id?: number | string;
+  item_type?: string;
   artist?: string;
   art_id?: number | string;
   current?: {
+    band_id?: number | string;
     title?: string;
     track_id?: number | string;
     art_id?: number | string;
@@ -109,6 +116,9 @@ export function parseTralbum(blob: RawTralbum): TralbumData | null {
     defaultTrack,
     tracks,
     artUrl: artUrlFromId(current?.art_id ?? blob.art_id),
+    itemId: blob.id != null ? String(blob.id) : null,
+    itemType: blob.item_type === "album" || blob.item_type === "track" ? blob.item_type : null,
+    bandId: current?.band_id != null ? String(current.band_id) : null,
   };
 }
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Library, Pause, Play, Trash2, Wand2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, Heart, Library, Pause, Play, Trash2, Wand2 } from "lucide-react";
+import { releaseKey, trackKey } from "../../lib/digger";
 import type { CardRecord, ListColumnId, TrackRecord } from "../../lib/types";
 import Scrobbler from "./Scrobbler";
 
@@ -56,8 +57,12 @@ interface Props {
   onAnalyze: (cardId: string) => void;
   /** magic wand on a single track row — same, for one track */
   onAnalyzeTrack: (cardId: string, trackId: string) => void;
-  /** opens this release's artist/label's whole catalogue as a new collection */
+  /** opens this release's artist/label's whole catalogue in our view */
   onListenToArtist: (card: CardRecord) => void;
+  /** releaseKey/trackKey strings known to be on the fan's Bandcamp wishlist */
+  wishlisted: Set<string>;
+  /** hearts — a release, or one of its tracks when `track` is given */
+  onToggleWishlist: (card: CardRecord, track?: TrackRecord) => void;
   onGoto: (card: CardRecord) => void;
   /** tab-grid only — a label collection's releases have no tab behind them */
   onClose?: (card: CardRecord) => void;
@@ -85,6 +90,8 @@ export default function ListView({
   onAnalyze,
   onAnalyzeTrack,
   onListenToArtist,
+  wishlisted,
+  onToggleWishlist,
   onGoto,
   onClose,
   onReopen,
@@ -122,8 +129,19 @@ export default function ListView({
     switch (columnId) {
       case "title": {
         const disabled = !track.streamUrl;
+        const hearted = wishlisted.has(trackKey(track.trackId));
         return (
           <div className="flex min-w-0 items-center gap-3">
+            <span
+              title={hearted ? "Remove this track from your Bandcamp wishlist" : "Add this track to your Bandcamp wishlist"}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleWishlist(card, track);
+              }}
+              className={`flex-none cursor-pointer hover:text-accent ${hearted ? "text-accent" : "text-subtext opacity-0 group-hover:opacity-100"}`}
+            >
+              <Heart size={11} fill={hearted ? "currentColor" : "none"} />
+            </span>
             <div onClick={(e) => e.stopPropagation()} className="flex-none">
               <Scrobbler
                 peaks={waveforms[track.trackId] ?? null}
@@ -316,6 +334,14 @@ export default function ListView({
                     }}
                   >
                     <Wand2 size={13} className={cardAnalyzing ? "animate-pulse" : undefined} />
+                  </span>
+                  <span
+                    title={wishlisted.has(releaseKey(c.url)) ? "Remove from your Bandcamp wishlist" : "Add to your Bandcamp wishlist"}
+                    onClick={() => onToggleWishlist(c)}
+                    className="cursor-pointer hover:text-accent"
+                    style={{ color: wishlisted.has(releaseKey(c.url)) ? "#1da0c3" : "#8d8a85" }}
+                  >
+                    <Heart size={13} fill={wishlisted.has(releaseKey(c.url)) ? "currentColor" : "none"} />
                   </span>
                   <span
                     title="Listen to this artist's whole catalogue"

@@ -1,9 +1,11 @@
-import type { CardRecord, LabelCollection, PlaybackMode, UiConfig } from "./types.ts";
-import { DEFAULT_UI_CONFIG } from "./types.ts";
+import type { CardRecord, LabelCollection, PlaybackMode, Settings, UiConfig } from "./types.ts";
+import { DEFAULT_SETTINGS, DEFAULT_UI_CONFIG } from "./types.ts";
 
 const CARDS_KEY = "cards";
 const PLAYBACK_MODE_KEY = "playbackMode";
 const UI_CONFIG_KEY = "uiConfig";
+const SETTINGS_KEY = "settings";
+const WISHLISTED_KEY = "wishlisted";
 
 /** Backfills fields added after cards may have already been persisted (e.g. `tracks`). */
 function normalizeCard(c: CardRecord): CardRecord {
@@ -13,6 +15,9 @@ function normalizeCard(c: CardRecord): CardRecord {
     selectedTrackId: c.selectedTrackId ?? null,
     archived: c.archived ?? false,
     attempts: c.attempts ?? 0,
+    itemId: c.itemId ?? null,
+    itemType: c.itemType ?? null,
+    bandId: c.bandId ?? null,
   };
 }
 
@@ -104,7 +109,14 @@ export function onStorageChange(
 // never rewrites (or wakes listeners for) the tab-grid's `cards` key. Label and
 // wishlist collections are the exact same shape — just a different key prefix.
 
-export type CollectionKind = "label" | "wishlist";
+export type CollectionKind = "label" | "wishlist" | "album";
+
+const COLLECTION_KINDS: CollectionKind[] = ["label", "wishlist", "album"];
+
+/** For kinds arriving over messages/URLs — anything unknown is a label. */
+export function parseKind(kind: unknown): CollectionKind {
+  return COLLECTION_KINDS.includes(kind as CollectionKind) ? (kind as CollectionKind) : "label";
+}
 
 const collectionKey = (kind: CollectionKind, id: string) => `${kind}:${id}`;
 
@@ -171,8 +183,8 @@ export async function listCollections(): Promise<CollectionSummary[]> {
   for (const [key, value] of Object.entries(all)) {
     const sep = key.indexOf(":");
     if (sep === -1) continue;
-    const kind = key.slice(0, sep);
-    if (kind !== "label" && kind !== "wishlist") continue;
+    const kind = key.slice(0, sep) as CollectionKind;
+    if (!COLLECTION_KINDS.includes(kind)) continue;
     const col = value as LabelCollection;
     out.push({ kind, id: key.slice(sep + 1), name: col.name || col.id, count: col.cards?.length ?? 0 });
   }
@@ -188,8 +200,49 @@ export async function removeCollection(kind: CollectionKind, id: string): Promis
 export function onCollectionsListChange(cb: () => void) {
   const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
     if (area !== "local") return;
-    const touched = Object.keys(changes).some((k) => k.startsWith("label:") || k.startsWith("wishlist:"));
+    const touched = Object.keys(changes).some((k) => COLLECTION_KINDS.some((kind) => k.startsWith(`${kind}:`)));
     if (touched) cb();
+  };
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
+}
+
+// --- settings ----------------------------------------------------------------
+
+export async function getSettings(): Promise<Settings> {
+  const { [SETTINGS_KEY]: s } = await chrome.storage.local.get(SETTINGS_KEY);
+  return { ...DEFAULT_SETTINGS, ...(s as Partial<Settings> | undefined) };
+}
+
+export async function setSettings(s: Settings): Promise<void> {
+  await chrome.storage.local.set({ [SETTINGS_KEY]: s });
+}
+
+// --- wishlisted ----------------------------------------------------------------
+// What we know is on the fan's native Bandcamp wishlist, as releaseKey/trackKey
+// strings (lib/digger.ts). Filled by hearting things here and replaced
+// wholesale whenever the full wishlist is read off the fan's page — nothing
+// else tells us, so a release wishlisted on Bandcamp itself shows up once the
+// wishlist view is next opened.
+
+export async function getWishlisted(): Promise<string[]> {
+  const { [WISHLISTED_KEY]: keys } = await chrome.storage.local.get(WISHLISTED_KEY);
+  return (keys as string[] | undefined) ?? [];
+}
+
+export function updateWishlisted(mutate: (keys: Set<string>) => void): Promise<string[]> {
+  return serialize(async () => {
+    const keys = new Set(await getWishlisted());
+    mutate(keys);
+    const next = [...keys];
+    await chrome.storage.local.set({ [WISHLISTED_KEY]: next });
+    return next;
+  });
+}
+
+export function onWishlistedChange(cb: (keys: string[]) => void) {
+  const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area === "local" && changes[WISHLISTED_KEY]) cb((changes[WISHLISTED_KEY].newValue as string[] | undefined) ?? []);
   };
   chrome.storage.onChanged.addListener(listener);
   return () => chrome.storage.onChanged.removeListener(listener);
