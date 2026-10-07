@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "pnpm build:chrome && pnpm build:ff",
-    "build:chrome": "vite build",
-    "build:ff": "vite build --mode firefox",
+    "build:chrome": "vite build && cd dist/chrome && zip -qrFS ../../chrome.zip . -x \".*\"",
+    "build:ff": "vite build --mode firefox && cd dist/firefox && zip -qrFS ../../firefox.zip . -x \".*\"",
     "typecheck": "tsc --noEmit",
     "check": "node --experimental-strip-types src/lib/discography.check.ts && node --experimental-strip-types src/lib/waveform.check.ts && node --experimental-strip-types src/lib/storage.check.ts"
   },
