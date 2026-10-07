@@ -6,7 +6,9 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "pnpm build:chrome && pnpm build:ff",
+    "build:chrome": "vite build",
+    "build:ff": "vite build --mode firefox",
     "typecheck": "tsc --noEmit",
     "check": "node --experimental-strip-types src/lib/discography.check.ts && node --experimental-strip-types src/lib/waveform.check.ts && node --experimental-strip-types src/lib/storage.check.ts"
   },
