@@ -40,6 +40,12 @@ export interface CardRecord {
   order: number;
   /** moved out of the main grid/list into the Archive section via the "Clean" action */
   archived: boolean;
+  /** bandcamp's own ids, off data-tralbum — what its wishlist endpoint takes.
+   *  null until extracted (and on cards stored before these existed; the
+   *  background looks them up on demand then). */
+  itemId: string | null;
+  itemType: "album" | "track" | null;
+  bandId: string | null;
 }
 
 export type PlaybackMode = "single" | "album";
@@ -57,6 +63,13 @@ export interface UiConfig {
   listColumnSizing: Partial<Record<ListColumnId, number>>;
 }
 
+export interface Settings {
+  /** show our view on supported Bandcamp pages even without ?view=digger */
+  diggerByDefault: boolean;
+}
+
+export const DEFAULT_SETTINGS: Settings = { diggerByDefault: false };
+
 export const DEFAULT_UI_CONFIG: UiConfig = {
   view: "grid",
   archiveOpen: false,
@@ -68,7 +81,8 @@ export const DEFAULT_UI_CONFIG: UiConfig = {
  *  Same CardRecord shape as the tab grid so the list view renders both — these
  *  just never have a tabId. */
 export interface LabelCollection {
-  /** bandcamp host the grid was read from, e.g. "ninjatune.bandcamp.com" */
+  /** bandcamp host the grid was read from, e.g. "ninjatune.bandcamp.com"
+   *  (a fan's username for a wishlist, the release URL for a single album) */
   id: string;
   url: string;
   name: string;

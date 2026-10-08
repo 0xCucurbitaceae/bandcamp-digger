@@ -16,6 +16,9 @@ interface PageDataItem {
   item_art_url?: string;
   item_art?: { url?: string };
   item_art_id?: number | string;
+  /** "a"/"t" + id: a wishlisted single track is a track item, not its album */
+  tralbum_type?: string;
+  tralbum_id?: number | string;
 }
 
 function artUrlFromId(artId: number | string | undefined): string | null {
@@ -30,6 +33,7 @@ function toItem(raw: PageDataItem): DiscographyItem | null {
     title: (raw.item_title ?? "").trim(),
     artist: raw.band_name?.trim() || null,
     artUrl: raw.item_art_url ?? raw.item_art?.url ?? artUrlFromId(raw.item_art_id),
+    trackId: raw.tralbum_type === "t" && raw.tralbum_id != null ? String(raw.tralbum_id) : null,
   };
 }
 

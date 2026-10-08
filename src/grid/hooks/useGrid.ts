@@ -3,6 +3,8 @@ import { getCards, updateCards, getUiConfig, setUiConfig, onStorageChange } from
 import type { CardRecord, ListColumnId, UiConfig, ViewMode } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
 import { usePlayer } from "../../hooks/usePlayer";
+import { useWishlist } from "../../hooks/useWishlist";
+import { artistDiggerUrl } from "../../lib/digger";
 
 export type { ViewMode };
 
@@ -78,6 +80,7 @@ export function useGrid() {
     onToast: toast,
   });
   const { playingId, setPlayingId, setIsPlaying } = player;
+  const wishlist = useWishlist(toast);
 
   const requestSync = useCallback(async () => {
     if (syncing) return;
@@ -190,17 +193,11 @@ export function useGrid() {
     }
   }, [cards, playingId, setPlayingId, setIsPlaying]);
 
-  /** Same as the injected page's "Listen to all" button, triggered from a
-   *  single release row instead — fetches that artist's whole catalogue in
-   *  the background and opens it as a label collection. */
-  const listenToArtist = useCallback(
-    async (card: CardRecord) => {
-      toast("Reading artist's catalogue…");
-      const res = await chrome.runtime.sendMessage({ type: "openLabelFromRelease", url: card.url });
-      if (!res?.ok) toast("Couldn't read that artist's catalogue");
-    },
-    [toast]
-  );
+  /** The artist's whole catalogue, in our view on their own Bandcamp page —
+   *  a new tab, so the merged tabs stay exactly where they are. */
+  const listenToArtist = useCallback((card: CardRecord) => {
+    chrome.tabs.create({ url: artistDiggerUrl(card.url) });
+  }, []);
 
   /** Permanently deletes an archived card — the only true delete left in the app. */
   const removeArchived = useCallback((id: string) => {
@@ -211,6 +208,7 @@ export function useGrid() {
 
   return {
     ...player,
+    ...wishlist,
     cards: ordered,
     archivedCards,
     archiveOpen: uiConfig.archiveOpen,

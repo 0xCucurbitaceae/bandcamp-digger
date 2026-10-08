@@ -1,24 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCollection, updateCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange } from "../../lib/storage";
+import { getCollection, updateCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange, parseKind } from "../../lib/storage";
 import type { CollectionKind } from "../../lib/storage";
 import type { CardRecord, LabelCollection, ListColumnId, UiConfig } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
+import { artistDiggerUrl, withView } from "../../lib/digger";
 import { usePlayer } from "../../hooks/usePlayer";
+import { useWishlist } from "../../hooks/useWishlist";
 
 const NO_CARDS: CardRecord[] = [];
 
 /**
  * Collection page state: one collection out of storage, plus the shared
- * player. Serves both a label/artist catalogue and a fan's wishlist — same
- * `LabelCollection` shape either way (see storage.ts's `CollectionKind`),
- * so this one hook + page covers both rather than cloning it a second time.
- * The background walks the collection and writes tracklists in as they
- * land, so everything here is driven by storage changes, not local fetching.
+ * player. Serves a label/artist catalogue, a fan's wishlist and a single
+ * album — same `LabelCollection` shape each time (see storage.ts's
+ * `CollectionKind`). The background walks the collection and writes
+ * tracklists in as they land, so everything here is driven by storage
+ * changes, not local fetching.
+ *
+ * Lives inside the Bandcamp page it was read from (content/listenAll.ts frames
+ * it in), so "the current tab" is that Bandcamp tab — navigating it is how
+ * this view moves between artists.
  */
 export function useLabel() {
   const params = useMemo(() => new URLSearchParams(location.search), []);
   const id = useMemo(() => params.get("id") ?? "", [params]);
-  const kind = useMemo<CollectionKind>(() => (params.get("kind") === "wishlist" ? "wishlist" : "label"), [params]);
+  const kind = useMemo<CollectionKind>(() => parseKind(params.get("kind")), [params]);
   const [collection, setLocalCollection] = useState<LabelCollection | null>(null);
   const [uiConfig, setUiConfigState] = useState<UiConfig>(DEFAULT_UI_CONFIG);
   const [loaded, setLoaded] = useState(false);
@@ -95,21 +101,24 @@ export function useLabel() {
     []
   );
 
+  const wishlist = useWishlist(toast);
+
   const openRelease = useCallback((card: CardRecord) => {
     chrome.tabs.create({ url: card.url });
   }, []);
 
-  /** Same as the injected page's "Listen to all" button, triggered from a
-   *  single release row instead — fetches that artist's whole catalogue in
-   *  the background and opens it as a (possibly different) label collection. */
-  const listenToArtist = useCallback(
-    async (card: CardRecord) => {
-      toast("Reading artist's catalogue…");
-      const res = await chrome.runtime.sendMessage({ type: "openLabelFromRelease", url: card.url });
-      if (!res?.ok) toast("Couldn't read that artist's catalogue");
-    },
-    [toast]
-  );
+  /** Navigates the tab this view is framed in — so Back returns here. */
+  const navigateTab = useCallback(async (url: (current: string) => string) => {
+    const tab = await chrome.tabs.getCurrent();
+    if (tab?.id && tab.url) chrome.tabs.update(tab.id, { url: url(tab.url) });
+  }, []);
+
+  /** This release's artist/label catalogue, in place of this view. */
+  const listenToArtist = useCallback((card: CardRecord) => navigateTab(() => artistDiggerUrl(card.url)), [navigateTab]);
+
+  /** Bandcamp's own page for what's on screen — same URL, ?view=bandcamp, which
+   *  also holds when the "digger by default" setting is on. */
+  const showNative = useCallback(() => navigateTab((current) => withView(current, "bandcamp")), [navigateTab]);
 
   const loadedCount = useMemo(() => cards.filter((c) => c.status !== "pending").length, [cards]);
 
@@ -128,5 +137,7 @@ export function useLabel() {
     setListColumns,
     openRelease,
     listenToArtist,
+    showNative,
+    ...wishlist,
   };
 }

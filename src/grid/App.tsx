@@ -105,6 +105,8 @@ export default function App() {
           onAnalyze={g.analyzeCard}
           onAnalyzeTrack={g.analyzeTrack}
           onListenToArtist={g.listenToArtist}
+          wishlisted={g.wishlisted}
+          onToggleWishlist={g.toggleWishlist}
           onGoto={g.goto}
           onClose={g.closeTab}
           onReopen={g.reopenTab}

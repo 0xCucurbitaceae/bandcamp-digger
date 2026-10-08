@@ -1,8 +1,8 @@
-import { parseTralbum, fetchExtract, decodeEntities, BROWSER_HEADERS } from "./lib/bandcamp";
+import { parseTralbum, fetchExtract } from "./lib/bandcamp";
 import type { TralbumData } from "./lib/bandcamp";
-import { parseDiscographyHtml } from "./lib/discography";
 import type { DiscographyItem } from "./lib/discography";
-import { getCards, setCards, getCollection, setCollection, updateCards, updateCollection } from "./lib/storage";
+import { releaseKey, trackKey, viewOf } from "./lib/digger";
+import { getCards, getCollection, setCollection, updateCards, updateCollection, updateWishlisted, parseKind } from "./lib/storage";
 import type { CollectionKind } from "./lib/storage";
 import type { CardRecord } from "./lib/types";
 
@@ -37,11 +37,16 @@ function enqueueFetch<T>(job: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** The merged-tabs page — the one page of ours with its own URL; every other
+ *  view lives on a Bandcamp URL (lib/digger.ts). Focuses the window too:
+ *  tabs.update({ active }) only switches tabs inside that tab's own window, so
+ *  a grid sitting in another window stayed hidden behind whatever was in front. */
 async function openGrid() {
   const url = chrome.runtime.getURL("src/grid/index.html");
-  const existing = await chrome.tabs.query({ url });
-  if (existing[0]?.id) {
-    await chrome.tabs.update(existing[0].id, { active: true });
+  const [existing] = await chrome.tabs.query({ url });
+  if (existing?.id) {
+    await chrome.windows.update(existing.windowId, { focused: true });
+    await chrome.tabs.update(existing.id, { active: true });
   } else {
     await chrome.tabs.create({ url });
   }
@@ -86,6 +91,9 @@ function applyTralbum(card: CardRecord, data: TralbumData): CardRecord {
     artUrl: data.artUrl,
     status: data.defaultTrack ? "ready" : "unplayable",
     refreshedAt: nowMs(),
+    itemId: data.itemId,
+    itemType: data.itemType,
+    bandId: data.bandId,
   };
 }
 
@@ -179,8 +187,10 @@ async function refreshTrack(cardId: string, collectionKind?: CollectionKind, col
  * for a since-fixed reason isn't stuck for good.
  */
 async function sync(auto = false) {
-  const tabs = await chrome.tabs.query({ url: BANDCAMP_MATCH });
-  const tabsByUrl = new Map(tabs.filter((t) => t.url).map((t) => [t.url as string, t]));
+  // A tab showing our own view (?view=digger) is a catalogue being browsed,
+  // not a release the user opened to dig through — keep it out of the grid.
+  const tabs = (await chrome.tabs.query({ url: BANDCAMP_MATCH })).filter((t) => t.url && viewOf(t.url) !== "digger");
+  const tabsByUrl = new Map(tabs.map((t) => [t.url as string, t]));
 
   // Skeletons + tab re-linking, applied to the freshest stored list: a
   // previous sync's fetch queue is still writing extracted cards in while
@@ -227,6 +237,9 @@ async function sync(auto = false) {
         refreshedAt: null,
         order: nextOrder++,
         archived: false,
+        itemId: null,
+        itemType: null,
+        bandId: null,
       };
       stored.push(fresh);
     }
@@ -281,10 +294,10 @@ async function sync(auto = false) {
   }
 }
 
-// --- label catalogues & wishlists --------------------------------------------
-// Both are just a named batch of releases (label discography, fan wishlist) —
-// same CardRecord shape, same one-page-per-collection storage. See
-// storage.ts's CollectionKind for the two supported kinds.
+// --- collections: label catalogues, wishlists, single albums -----------------
+// Each is a named batch of releases read off the Bandcamp page the user is on,
+// shown there by our view (content/listenAll.ts) — same CardRecord shape, same
+// one-key-per-collection storage. See storage.ts's CollectionKind.
 
 /** Rewrites one card inside a collection, re-reading first so concurrent
  *  track loads don't clobber each other (same pattern as the grid's applyUpdate). */
@@ -316,63 +329,46 @@ function cardFromRelease(item: DiscographyItem, order: number): CardRecord {
     refreshedAt: null,
     order,
     archived: false,
+    itemId: null,
+    itemType: null,
+    bandId: null,
   };
 }
 
 /**
- * Stores the batch of releases the content script read off the page (a
- * label/artist discography grid, or a fan's wishlist) and opens the
- * collection page on it. Re-clicking the button refreshes the release list
- * while keeping every tracklist already fetched — reloading those would cost
- * another full walk.
+ * Stores the batch of releases the content script read off the page.
+ * Reopening the view refreshes the release list while keeping every tracklist
+ * already fetched — reloading those would cost another full walk. A single
+ * album page hands over its own data-tralbum as `data`, so it needs no fetch
+ * at all (and gets freshly signed stream URLs for free).
  */
-async function openCollection(kind: CollectionKind, id: string, url: string, name: string, items: DiscographyItem[]) {
+async function storeCollection(
+  kind: CollectionKind,
+  id: string,
+  url: string,
+  name: string,
+  items: DiscographyItem[],
+  data: TralbumData | null
+) {
   const existing = await getCollection(kind, id);
   const byUrl = new Map((existing?.cards ?? []).map((c) => [c.url, c]));
   const cards = items.map((item, i) => {
-    const prev = byUrl.get(item.url);
-    return prev ? { ...prev, order: i } : cardFromRelease(item, i);
+    const card = { ...(byUrl.get(item.url) ?? cardFromRelease(item, i)), order: i };
+    return data ? applyTralbum(card, data) : card;
   });
-
   await setCollection(kind, { id, url, name, cards });
-  const pageUrl = chrome.runtime.getURL(
-    `src/label/index.html?id=${encodeURIComponent(id)}&kind=${kind}`
-  );
-  const open = await chrome.tabs.query({ url: pageUrl });
-  if (open[0]?.id) await chrome.tabs.update(open[0].id, { active: true });
-  else await chrome.tabs.create({ url: pageUrl });
-}
 
-/**
- * "Listen to this artist's whole catalogue" from anywhere a release URL is
- * known — the same thing the content script's injected button does, minus
- * needing to actually visit the artist's page first. Bandcamp's /music page
- * is plain server-rendered HTML (verified live), so this is a background
- * fetch + regex parse (`parseDiscographyHtml`), same shape as `fetchExtract`.
- */
-async function fetchDiscographyFor(releaseUrl: string): Promise<{ id: string; url: string; name: string; items: DiscographyItem[] } | null> {
-  let origin: string;
-  try {
-    origin = new URL(releaseUrl).origin;
-  } catch {
-    return null;
+  if (kind === "wishlist") {
+    // The whole wishlist was just read off the fan's page — the one
+    // authoritative answer to what's on it, so it replaces what we knew.
+    await updateWishlisted((set) => {
+      set.clear();
+      for (const item of items) {
+        set.add(releaseKey(item.url));
+        if (item.trackId) set.add(trackKey(item.trackId));
+      }
+    });
   }
-
-  for (const path of ["/music", "/"]) {
-    let res: Response;
-    try {
-      res = await fetch(origin + path, { headers: BROWSER_HEADERS, redirect: "follow" });
-    } catch {
-      continue;
-    }
-    if (!res.ok) continue;
-    const html = await res.text();
-    const disco = parseDiscographyHtml(html, origin, decodeEntities);
-    if (disco && disco.items.length > 0) {
-      return { id: new URL(origin).host, url: origin, name: disco.bandName || new URL(origin).host, items: disco.items };
-    }
-  }
-  return null;
 }
 
 // Collections already being walked, so the page's resume kick doesn't queue twice.
@@ -399,7 +395,71 @@ async function loadCollection(kind: CollectionKind, id: string) {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// --- native Bandcamp wishlist --------------------------------------------------
+// Bandcamp only honours the fan's session from a script on one of its own pages
+// (see lib/wishlist.ts), so the POST itself is made by the content script in an
+// open Bandcamp tab. Any tab will do: Bandcamp's own fan pages wishlist every
+// band's releases from bandcamp.com, so the host it's posted to doesn't matter.
+
+interface WishlistRequest {
+  add: boolean;
+  /** the release — also how its ids get looked up when the card predates them */
+  url: string;
+  /** set → wishlist this one track rather than the release */
+  trackId?: string | null;
+  itemId?: string | null;
+  itemType?: "album" | "track" | null;
+  bandId?: string | null;
+  /** a tab already showing this release, tried first */
+  tabId?: number | null;
+}
+
+type WishlistResult = { ok: true } | { ok: false; error: "lookup" | "no-tab" | "logged-out" | "failed" };
+
+async function setWishlisted(req: WishlistRequest, senderTabId: number | undefined): Promise<WishlistResult> {
+  let { itemId, itemType, bandId } = req;
+  if (!itemId || !bandId) {
+    // A card extracted before these ids were kept: one page fetch finds them.
+    const outcome = await fetchExtract(req.url);
+    if (outcome.kind !== "ok") return { ok: false, error: "lookup" };
+    ({ itemId, itemType, bandId } = outcome.data);
+    if (!itemId || !bandId) return { ok: false, error: "lookup" };
+  }
+  const item = req.trackId
+    ? { itemId: req.trackId, itemType: "track" as const, bandId }
+    : { itemId, itemType: itemType ?? "album", bandId };
+
+  // The sender first: when our view is embedded in a Bandcamp page, that tab's
+  // own content script is right there. Our grid page has none — it just fails over.
+  const bandcampTabs = (await chrome.tabs.query({ url: BANDCAMP_MATCH })).map((t) => t.id);
+  const candidates = [...new Set([senderTabId, req.tabId, ...bandcampTabs])].filter(
+    (id): id is number => typeof id === "number"
+  );
+  let result: WishlistResult = { ok: false, error: "no-tab" };
+  for (const tabId of candidates) {
+    try {
+      const r = (await chrome.tabs.sendMessage(tabId, { type: "collectItem", add: req.add, ...item }, { frameId: 0 })) as
+        | WishlistResult
+        | undefined;
+      if (r) {
+        result = r;
+        break;
+      }
+    } catch {
+      // no content script in that tab (not a Bandcamp page, or one loaded before an extension reload)
+    }
+  }
+  if (!result.ok) return result;
+
+  // A single-track release is one wishlist item under both keys.
+  const keys = req.trackId
+    ? [trackKey(req.trackId)]
+    : [releaseKey(req.url), ...(item.itemType === "track" ? [trackKey(item.itemId)] : [])];
+  await updateWishlisted((set) => keys.forEach((k) => (req.add ? set.add(k) : set.delete(k))));
+  return result;
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "sync") {
     sync(msg.auto === true).then(() => sendResponse({ ok: true }));
     return true; // keep the message channel open for the async response
@@ -407,32 +467,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "loadCollection" && typeof msg.id === "string") {
     // Fire-and-forget: this can run for minutes on a big catalogue/wishlist,
     // and the page follows along through storage changes.
-    loadCollection(msg.kind === "wishlist" ? "wishlist" : "label", msg.id);
+    loadCollection(parseKind(msg.kind), msg.id);
     sendResponse({ ok: true });
     return false;
   }
-  if (msg?.type === "openLabel") {
-    openCollection("label", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
+  if (msg?.type === "storeCollection" && typeof msg.id === "string") {
+    storeCollection(parseKind(msg.kind), msg.id, msg.url, msg.name, msg.items, msg.data ?? null).then(() =>
+      sendResponse({ ok: true })
+    );
     return true;
   }
-  if (msg?.type === "openWishlist") {
-    openCollection("wishlist", msg.id, msg.url, msg.name, msg.items).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-  if (msg?.type === "openLabelFromRelease" && typeof msg.url === "string") {
-    // Triggered from a single release row (list view) rather than the artist's
-    // own page — fetches that artist's catalogue in the background first.
-    fetchDiscographyFor(msg.url).then((disco) => {
-      if (disco) openCollection("label", disco.id, disco.url, disco.name, disco.items).then(() => sendResponse({ ok: true }));
-      else sendResponse({ ok: false });
-    });
+  if (msg?.type === "wishlist" && typeof msg.url === "string") {
+    setWishlisted(msg, sender.tab?.id).then(sendResponse);
     return true;
   }
   if (msg?.type === "refreshTrack" && msg.cardId) {
     // `collectionKind`+`collectionId` route the refreshed card back to a
-    // label/wishlist collection instead of the tab grid — those releases
-    // expire exactly the same way.
-    refreshTrack(msg.cardId, msg.collectionKind, msg.collectionId).then(() => sendResponse({ ok: true }));
+    // collection instead of the tab grid — those releases expire exactly the
+    // same way.
+    refreshTrack(msg.cardId, msg.collectionKind && parseKind(msg.collectionKind), msg.collectionId).then(() =>
+      sendResponse({ ok: true })
+    );
     return true;
   }
   return false;

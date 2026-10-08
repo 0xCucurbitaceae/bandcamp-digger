@@ -1,14 +1,25 @@
 import { Coffee, ExternalLink, Zap } from "lucide-react";
+import type { CollectionKind } from "../lib/storage";
 import ListView from "../grid/components/ListView";
 import Toast from "../grid/components/Toast";
 import PlayerBar from "../grid/components/PlayerBar";
 import { useLabel } from "./hooks/useLabel";
 
+const EMPTY: Record<CollectionKind, string> = {
+  wishlist: "Nothing on this wishlist.",
+  label: "No releases on this page.",
+  album: "Nothing playable on this release.",
+};
+
 export default function App() {
   const l = useLabel();
   const total = l.cards.length;
   const status =
-    l.loadedCount < total ? `${l.loadedCount} / ${total} releases loaded` : `${total} releases`;
+    l.kind === "album"
+      ? `${l.cards[0]?.tracks.length ?? 0} tracks`
+      : l.loadedCount < total
+        ? `${l.loadedCount} / ${total} releases loaded`
+        : `${total} releases`;
 
   return (
     <div className="min-h-screen bg-bg pb-[92px] font-sans text-text">
@@ -28,25 +39,20 @@ export default function App() {
 
         <div className="h-3.5 w-px bg-border" />
 
-        <a
-          href={l.collection?.url}
-          target="_blank"
-          rel="noreferrer"
-          className="flex select-none items-baseline gap-[7px] text-xs text-subtext no-underline hover:text-text"
+        <div
+          onClick={l.showNative}
+          title="Show Bandcamp's own page here instead"
+          className="flex cursor-pointer select-none items-baseline gap-[7px] text-xs text-subtext hover:text-text"
         >
           <ExternalLink size={12} />
-          <span>Bandcamp</span>
-        </a>
+          <span>Bandcamp view</span>
+        </div>
       </div>
 
       <div className="mx-11 h-px bg-border" />
 
       {!l.loaded ? null : total === 0 ? (
-        <div className="px-11 py-16 text-sm text-subtext">
-          {l.kind === "wishlist"
-            ? "Nothing here — open your Bandcamp wishlist and hit “Listen to wishlist”."
-            : "Nothing here — open a Bandcamp label or artist page and hit “Listen to all”."}
-        </div>
+        <div className="px-11 py-16 text-sm text-subtext">{EMPTY[l.kind]}</div>
       ) : (
         <ListView
           cards={l.cards}
@@ -68,6 +74,8 @@ export default function App() {
           onAnalyze={l.analyzeCard}
           onAnalyzeTrack={l.analyzeTrack}
           onListenToArtist={l.listenToArtist}
+          wishlisted={l.wishlisted}
+          onToggleWishlist={l.toggleWishlist}
           onGoto={l.openRelease}
         />
       )}
