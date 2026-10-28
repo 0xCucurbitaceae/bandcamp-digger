@@ -5,6 +5,7 @@ import type { CardRecord, ListColumnId, TrackRecord } from "../../lib/types";
 import Scrobbler from "./Scrobbler";
 
 const COLLAPSED_HEIGHT = 160; // ~5 track rows
+const EXPANDER_HEIGHT = 36; // room for the expand/collapse chevron + its fade
 const TRACK_ROW_HEIGHT = 30; // approx height of one track row (py-[7px]*2 + line height)
 const META_HEIGHT = 80; // left column's height (52px thumbnail + 14px top/bottom padding)
 const NO_ROWS: object[] = [];
@@ -357,7 +358,13 @@ export default function ListView({
                 </div>
               ) : (
                 <>
-                  <div style={expanded ? undefined : { maxHeight: COLLAPSED_HEIGHT, overflowY: "auto" }}>
+                  <div
+                    style={
+                      expanded
+                        ? { paddingBottom: EXPANDER_HEIGHT }
+                        : { maxHeight: COLLAPSED_HEIGHT + EXPANDER_HEIGHT, overflowY: "auto", paddingBottom: EXPANDER_HEIGHT }
+                    }
+                  >
                     {c.tracks.map((t, i) => {
                       const isCurrent = isCardPlaying && t.trackId === c.selectedTrackId;
                       // Dead (closed-tab) releases stay playable from cache — only fade the styling.
@@ -400,8 +407,8 @@ export default function ListView({
                     <div
                       onClick={() => toggleRow(c.id)}
                       title={expanded ? "Collapse" : "Expand"}
-                      className="absolute inset-x-0 bottom-0 flex h-9 cursor-pointer items-end justify-center text-subtext hover:text-text"
-                      style={expanded ? undefined : { background: "linear-gradient(to bottom, transparent, #131313 90%)" }}
+                      className="absolute inset-x-0 bottom-0 flex cursor-pointer items-end justify-center pb-2 text-subtext hover:text-text"
+                      style={{ height: EXPANDER_HEIGHT, background: "linear-gradient(to bottom, transparent, #131313 85%)" }}
                     >
                       {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                     </div>

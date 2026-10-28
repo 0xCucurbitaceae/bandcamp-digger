@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCollection, setCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange, parseCollectionKind } from "../../lib/storage";
+import { getCollection, updateCollection, getUiConfig, setUiConfig, onCollectionChange, onStorageChange, parseCollectionKind } from "../../lib/storage";
 import type { CollectionKind } from "../../lib/storage";
 import type { CardRecord, LabelCollection, ListColumnId, UiConfig } from "../../lib/types";
 import { DEFAULT_UI_CONFIG } from "../../lib/types";
@@ -123,9 +123,11 @@ export function useLabel() {
     [collections]
   );
 
-  /** Re-reads before writing: the background is writing tracklists into this
-   *  same collection while the user clicks around in it. Writes every copy, so
-   *  the visible list and the player never disagree about the selected track. */
+  /** Re-reads before writing, inside the serialized write chain: the background
+   *  is writing tracklists into this same collection while the user clicks
+   *  around in it, and a read-then-write pair would drop whatever landed
+   *  between the two. Writes every copy, so the visible list and the player
+   *  never disagree about the selected track. */
   const persistCard = useCallback(
     async (updated: CardRecord) => {
       for (const owner of ownersOf(updated.id)) {
@@ -135,12 +137,10 @@ export function useLabel() {
           if (!col) return prev;
           return { ...prev, [key]: { ...col, cards: col.cards.map((c) => (c.id === updated.id ? updated : c)) } };
         });
-        const col = await getCollection(owner.kind, owner.id);
-        if (!col) continue;
-        const idx = col.cards.findIndex((c) => c.id === updated.id);
-        if (idx === -1) continue;
-        col.cards[idx] = updated;
-        await setCollection(owner.kind, col);
+        await updateCollection(owner.kind, owner.id, (col) => ({
+          ...col,
+          cards: col.cards.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)),
+        }));
       }
     },
     [ownersOf]
